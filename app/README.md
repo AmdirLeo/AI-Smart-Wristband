@@ -1,12 +1,17 @@
-# App 工程位置
+# yian_app
 
-此目录留给 App 同事上传完整工程，目前尚未包含 App 实现。可采用 Flutter、React Native、原生 Android/iOS 等技术栈，并在本目录内自行组织子目录。
+A new Flutter project.
 
-- 模型服务位于 [`../model_service/`](../model_service/)，不需要复制模型到 App。
-- 接口契约位于 [`../docs/API.md`](../docs/API.md)，先用公开样例完成联调，再接 BLE 数据。
-- 服务地址使用配置项；真机的 `localhost` 指手机自身，须改为电脑局域网地址或部署后的 HTTPS 地址。
-- 输入为完整 10–20 秒记录，每行依次为时间戳、三轴加速度、三轴角速度。单位为秒、g、°/s；加速度保留重力。
-- 页面需要处理非跌倒、疑似跌倒、等待确认、确认安全、求助、超时模拟通知以及请求失败。
-- 当前接口没有用户/设备绑定、持久化历史或真实推送；不要把模拟事件当作正式告警功能。
+## Getting Started
 
-提交 App 时请将本文件更新为实际技术栈、依赖安装、运行步骤和服务地址配置说明。根目录已有通用 `.gitignore`，请按所用技术栈补充，避免提交密钥及构建产物。
+This project is a starting point for a Flutter application.
+
+A few resources to get you started if this is your first Flutter project:
+
+- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
+- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
+- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+
+For help getting started with Flutter development, view the
+[online documentation](https://docs.flutter.dev/), which offers tutorials,
+samples, guidance on mobile development, and a full API reference.

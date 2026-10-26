@@ -1,0 +1,33 @@
+name: yian_app
+description: "颐安云护 · AI 智能照护手环 App：BLE 接收手环数据，云端照护 API，预留 AI 分析接入。"
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: "^3.5.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # 状态管理
+  provider: ^6.1.2
+  # BLE（连接手环 XIAO nRF52840，Nordic UART Service）
+  flutter_blue_plus: ^1.32.0
+  # 云端 REST API
+  http: ^1.2.2
+  # 设置持久化
+  shared_preferences: ^2.3.2
+  # 语音询问（“您还好吗”）
+  flutter_tts: ^4.1.0
+  # BLE / 定位运行时权限
+  permission_handler: ^11.3.1
+  # 日期格式化
+  intl: ^0.19.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
