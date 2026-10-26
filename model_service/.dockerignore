@@ -1,0 +1,9 @@
+*
+!requirements.txt
+!requirements-web.txt
+!pipeline.py
+!app.py
+!model.joblib
+!demo_samples.json
+!static/
+!static/index.html

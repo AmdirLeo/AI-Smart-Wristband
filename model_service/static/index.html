@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>颐安·云护 · 跌倒识别演示</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23237261'/%3E%3Cpath d='M8 17h5l3-7 3 13 2-6h3' fill='none' stroke='white' stroke-width='2'/%3E%3C/svg%3E">
+  <style>
+    :root{--ink:#192927;--muted:#687773;--line:#dce5e1;--accent:#237261;--paper:#fff;--bg:#f7f9f7;--warn:#9d472d}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
+    button,input,select{font:inherit}button,select,.file-button{cursor:pointer}button:disabled{cursor:not-allowed;opacity:.45}button:focus-visible,input:focus-visible,select:focus-visible,.file-button:focus-within{outline:3px solid #92bdb0;outline-offset:3px}
+    .wrap{max-width:1180px;margin:auto;padding:0 36px}header{display:flex;align-items:center;justify-content:space-between;padding:22px 0;border-bottom:1px solid var(--line);gap:16px}.brand{font-weight:700;letter-spacing:2px}.header-right{display:flex;gap:12px;align-items:center;font-size:13px;color:var(--muted)}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#a8b0ad;margin-right:6px}.dot.on{background:var(--accent)}
+    .intro{padding:42px 0 26px}.eyebrow{font-size:12px;letter-spacing:2px;color:var(--accent);font-weight:600}h1{font-size:34px;letter-spacing:-1px;line-height:1.3;margin:10px 0 12px;font-weight:600}p{margin:0 0 12px}.sub{color:var(--muted);max-width:780px;font-size:14px}
+    .connection{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:18px}.connection label{font-size:13px;color:var(--muted)}input[type=password]{width:235px;padding:7px 10px;border:1px solid var(--line);border-radius:6px;background:var(--paper)}button,.file-button{padding:8px 16px;border:1px solid var(--line);border-radius:6px;color:var(--ink);background:var(--paper);display:inline-flex;align-items:center;justify-content:center;gap:6px}.primary{background:var(--accent);border-color:var(--accent);color:white}.small{font-size:13px;padding:6px 12px}.file-button{position:relative;font-size:14px;overflow:hidden}.file-button input{position:absolute;inset:0;opacity:0;width:100%;cursor:pointer}
+    .layout{display:grid;grid-template-columns:minmax(0,1fr) 290px;gap:30px;margin-bottom:36px}.main-panel,.aside-panel{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:24px}.panel-title{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:18px}h2{font-size:17px;margin:0;font-weight:600}h3{font-size:15px;margin:0 0 12px}.step{color:var(--accent);font-size:12px;font-weight:700;margin-right:10px}.tag{font-size:12px;color:var(--muted)}.source{display:flex;gap:10px;flex-wrap:wrap;align-items:center}select{min-width:0;flex:1;border:1px solid var(--line);border-radius:6px;padding:9px 12px;background:white;color:var(--ink)}.record-info{font-size:12px;color:var(--muted);margin:10px 0 18px;min-height:20px;overflow-wrap:anywhere}
+    .chart-wrap{height:240px;position:relative}canvas{width:100%;height:100%;display:block}.legend{display:flex;gap:18px;font-size:12px;color:var(--muted);margin-bottom:8px}.legend i{display:inline-block;width:16px;height:2px;vertical-align:middle;background:var(--accent);margin-right:5px}.legend .gray{background:#9ba9a4}.play-controls{border-top:1px solid var(--line);padding-top:18px;display:flex;gap:9px;align-items:center;flex-wrap:wrap}.play-controls select{flex:0 0 auto;width:90px;padding:8px;font-size:13px}.time{font-variant-numeric:tabular-nums;color:var(--muted);font-size:12px;margin-left:auto}.progress{height:3px;background:#e9efec;margin:15px 0 0;border-radius:3px;overflow:hidden}.progress span{display:block;width:0;height:100%;background:var(--accent)}
+    .result-section{border-top:1px solid var(--line);margin-top:26px;padding-top:23px}.result-line{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin:14px 0 8px}.result-label{font-size:27px;line-height:1.4;font-weight:600}.result-label.warn{color:var(--warn)}.score{font-size:13px;color:var(--muted)}.result-note{font-size:13px;color:var(--muted)}.confirmation{margin-top:18px;padding:18px 0 0;border-top:1px dashed var(--line)}.confirm-actions{display:flex;gap:10px;margin:12px 0}.status-text{font-size:14px}.sim-note{font-size:12px;color:var(--muted);margin-top:10px}.aside-panel{align-self:start}.metric{display:flex;justify-content:space-between;gap:8px;padding:12px 0;border-bottom:1px solid var(--line);font-size:13px}.metric strong{font-size:20px;font-weight:500}.aside-note{font-size:12px;color:var(--muted);margin-top:14px}.flow{margin:24px 0 0;padding-left:20px;color:var(--muted);font-size:13px}.flow li{padding:5px 0}.flow strong{font-weight:500;color:var(--ink)}.divider{border-top:1px solid var(--line);margin:23px 0}.error{border-left:3px solid var(--warn);padding:10px 14px;color:var(--warn);background:#fff7f2;margin:0 0 20px;font-size:14px}footer{border-top:1px solid var(--line);padding:20px 0 28px;font-size:12px;color:var(--muted)}a{color:var(--accent)}[hidden]{display:none!important}
+    @media(max-width:900px){.layout{grid-template-columns:1fr}.aside-panel{display:grid;grid-template-columns:1fr 1fr;gap:25px}.aside-panel .divider{display:none}.aside-panel .flow{margin-top:0}}@media(max-width:560px){.wrap{padding:0 18px}header{padding:16px 0}.header-right .extra{display:none}.intro{padding:28px 0 22px}h1{font-size:28px}.main-panel,.aside-panel{padding:18px}.aside-panel{display:block}.aside-panel .divider{display:block}.source{align-items:stretch}.source select{flex-basis:100%}.time{width:100%;margin-left:0}.chart-wrap{height:210px}.connection input{width:190px}.result-label{font-size:24px}}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header><div class="brand">颐安 · 云护</div><div class="header-right"><span class="extra">AI 智能照护手环</span><span><i class="dot" id="connection-dot"></i><span id="connection-status">正在连接</span></span></div></header>
+  <section class="intro">
+    <div class="eyebrow">个性化 AI 产品设计与实践 / 原型演示</div>
+    <h1>从一段运动，识别一次疑似跌倒。</h1>
+    <p class="sub">回放公开数据，观察手腕运动，再由随机森林完成判断。当前按完整的 10–20 秒记录识别，收完整段后才输出结果。</p>
+    <div class="connection"><label for="access-token">访问口令</label><input id="access-token" type="password" placeholder="本机未设置时可留空" autocomplete="off"><button id="connect" class="small">连接服务</button></div>
+  </section>
+  <div id="error" class="error" role="alert" hidden></div>
+  <main class="layout">
+    <div class="main-panel">
+      <div class="panel-title"><h2><span class="step">01</span>选择一段记录</h2><span class="tag">公开数据 / 自定义 CSV</span></div>
+      <div class="source"><select id="sample-select" aria-label="演示记录" disabled><option value="">正在加载示例…</option></select><label class="file-button">导入 CSV<input id="csv-file" type="file" accept=".csv,text/csv" aria-label="导入 CSV"></label></div>
+      <div class="record-info" id="record-info">连接后可选择四种演示案例，无需采集数据。</div>
+      <div class="legend"><span><i></i>加速度模长（g）</span><span><i class="gray"></i>静止重力参考：1 g</span></div>
+      <div class="chart-wrap"><canvas id="chart" role="img" aria-label="手腕加速度模长随时间变化的曲线"></canvas></div>
+      <div class="play-controls"><button id="play" class="primary" disabled>开始回放并识别</button><button id="direct" disabled>直接识别整段</button><select id="speed" aria-label="回放速度"><option value="1">1× 速度</option><option value="4">4× 速度</option></select><span id="time" class="time">0.0 / 0.0 秒</span></div>
+      <div class="progress" role="progressbar" aria-label="回放进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="progress-fill"></span></div>
+      <section class="result-section" aria-live="polite">
+        <h2><span class="step">02</span>模型识别结果</h2>
+        <div class="result-line"><span class="result-label" id="result-label">等待识别</span><span class="score" id="score"></span></div>
+        <p class="result-note" id="result-note">模型综合冲击、转动和静止等 45 个特征进行判断。</p>
+        <div class="confirmation" id="confirmation" hidden>
+          <h3><span class="step">03</span>确认当前状态</h3>
+          <p id="event-status" class="status-text"></p>
+          <div class="confirm-actions" id="confirm-actions"><button id="safe">我没事</button><button id="help" class="primary">需要帮助</button></div>
+          <p class="sim-note">课堂演示：确认、超时和通知均为模拟流程，不会发送短信或联系家属。</p>
+        </div>
+      </section>
+    </div>
+    <aside class="aside-panel">
+      <section><h2>模型的能力与边界</h2><div class="metric"><span>跌倒召回率</span><strong id="metric-recall">—</strong></div><div class="metric"><span>非跌倒记录误报率</span><strong id="metric-fpr">—</strong></div><div class="metric"><span>验证数据</span><strong id="metric-data" style="font-size:16px">—</strong></div><p class="aside-note">按参与者分组的五折交叉验证结果。误报率按记录计算，不代表每小时误报次数，也不代表真实老人佩戴效果。</p></section>
+      <section><div class="divider"></div><h3>这次演示展示什么</h3><ol class="flow"><li><strong>公开数据模拟上传</strong><br>使用模型训练时留出的参与者记录。</li><li><strong>服务端模型推理</strong><br>分数是分类依据，不是医学概率。</li><li><strong>疑似事件确认</strong><br>主动求助或超时后显示模拟通知。</li></ol><p class="aside-note">包含正确识别、误报和漏检示例。四条案例仅用于演示，不用于计算模型准确率。</p></section>
+    </aside>
+  </main>
+  <footer>数据：<a href="https://doi.org/10.6084/m9.figshare.4214283.v8" target="_blank" rel="noreferrer">UMAFall v8</a> · Eduardo Casilari / Jose A. Santoyo-Ramón · CC BY 4.0。演示记录经过手腕通道筛选、对齐及重采样。上传记录仅在内存中处理。</footer>
+</div>
+<script>
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const columns = ['timestamp_s','ax_g','ay_g','az_g','gx_dps','gy_dps','gz_dps'];
+  const activityNames = {Aplausing:'拍手',HandsUp:'举手',Bending:'弯腰',backwardFall:'向后跌倒',forwardFall:'向前跌倒',lateralFall:'侧向跌倒',LyingDown_OnABed:'上床躺下'};
+  let current = null, rawCsv = null, revision = 0, animation = 0, pollTimer = 0;
+  let elapsed = 0, playing = false, busy = false, eventId = null, connected = false;
+  let knownSamples = [];
+
+  function showError(message) { $('error').textContent = message; $('error').hidden = !message; }
+  async function api(path, options = {}) {
+    const headers = new Headers(options.headers || {});
+    const token = $('access-token').value;
+    if (token) headers.set('Authorization', 'Bearer ' + token);
+    const response = await fetch('/api' + path, {...options, headers, cache:'no-store'});
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '服务暂时无法完成请求，请稍后重试。');
+    return data;
+  }
+  function controls() {
+    $('play').disabled = !connected || !current || busy;
+    $('direct').disabled = !connected || !current || busy || playing;
+    $('play').textContent = playing ? '暂停回放' : (elapsed > 0 && current && elapsed < duration() ? '继续回放' : '开始回放并识别');
+  }
+  function duration() { const s = current?.samples; return s?.length ? s[s.length-1][0] - s[0][0] : 0; }
+  function reset() {
+    revision++; cancelAnimationFrame(animation); clearTimeout(pollTimer);
+    playing = false; busy = false; elapsed = 0; eventId = null;
+    $('confirmation').hidden = true; $('result-label').textContent = '等待识别';
+    $('result-label').classList.remove('warn'); $('score').textContent = '';
+    $('result-note').textContent = '模型综合冲击、转动和静止等 45 个特征进行判断。';
+    showError(''); controls(); draw();
+  }
+  async function connect() {
+    reset(); current = null; rawCsv = null; connected = false; controls(); draw();
+    const generation = revision;
+    $('connect').disabled = true; $('sample-select').disabled = true;
+    try {
+      const [info, listing] = await Promise.all([api('/info'), api('/samples')]);
+      if (generation !== revision) return;
+      connected = true; $('connection-status').textContent = '服务已连接'; $('connection-dot').classList.add('on');
+      $('metric-recall').textContent = (info.metrics.recall * 100).toFixed(1) + '%';
+      $('metric-fpr').textContent = (info.metrics.non_fall_trial_false_positive_rate * 100).toFixed(1) + '%';
+      $('metric-data').textContent = info.subjects + ' 人 / ' + info.trials + ' 条';
+      knownSamples = listing.samples;
+      $('sample-select').replaceChildren(...knownSamples.map(s => new Option(s.title, s.id)));
+      $('sample-select').disabled = false;
+      await loadSample(knownSamples[0].id);
+    } catch (error) {
+      $('connection-status').textContent = '未连接'; $('connection-dot').classList.remove('on'); showError(error.message);
+    } finally { $('connect').disabled = false; controls(); }
+  }
+  async function loadSample(id) {
+    reset(); current = null; rawCsv = null; controls(); draw();
+    const generation = revision;
+    $('record-info').textContent = '正在读取演示记录…';
+    try {
+      const data = await api('/samples/' + encodeURIComponent(id));
+      if (generation !== revision) return;
+      current = data;
+      $('sample-select').querySelector('option[value="custom"]')?.remove();
+      $('record-info').textContent = `参与者 ${data.subject} · ${activityNames[data.activity] || data.activity} · 真值：${data.true_label ? '跌倒' : '非跌倒'} · ${duration().toFixed(1)} 秒`;
+      $('csv-file').value = ''; controls(); draw();
+    } catch (error) { if (generation === revision) { showError(error.message); $('record-info').textContent = '记录加载失败。'; } }
+  }
+  async function loadCsv(file) {
+    if (!file) return;
+    reset(); current = null; rawCsv = null; controls(); draw();
+    const generation = revision;
+    try {
+      if (file.size > 2 * 1024 * 1024) throw new Error('CSV 不能超过 2 MB。');
+      const text = new TextDecoder('utf-8', {fatal:true}).decode(await file.arrayBuffer()).replace(/^\uFEFF/, '');
+      if (generation !== revision) return;
+      const lines = text.trim().split(/\r?\n/);
+      if (lines.shift() !== columns.join(',')) throw new Error('CSV 表头须为：' + columns.join(','));
+      const samples = lines.filter(line => line.trim()).map(line => {
+        const cells = line.split(',');
+        if (cells.length !== 7 || cells.some(c => !c.trim() || !Number.isFinite(Number(c)))) throw new Error('CSV 每行应包含七个有限数值，不能有空值。');
+        return cells.map(Number);
+      });
+      if (samples.length < 3 || samples.length > 4000) throw new Error('请上传包含 3–4000 行采样、时长 10–20 秒的记录。');
+      samples.sort((a,b) => a[0]-b[0]);
+      const seconds = samples[samples.length-1][0]-samples[0][0];
+      if (seconds < 10 || seconds > 20) throw new Error('当前模型要求完整的 10–20 秒记录。');
+      current = {samples, true_label:null}; rawCsv = text;
+      if (!$('sample-select').querySelector('option[value="custom"]')) $('sample-select').add(new Option('已导入的 CSV', 'custom'));
+      $('sample-select').value = 'custom';
+      $('record-info').textContent = `${file.name} · 自定义记录 · 真值未提供 · ${seconds.toFixed(1)} 秒`;
+      controls(); draw();
+    } catch (error) { if (generation === revision) { showError(error.message); $('record-info').textContent = '导入失败，请重新选择记录。'; } }
+  }
+  function draw() {
+    const canvas = $('chart'), rect = canvas.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.max(1, Math.round(rect.width*dpr)); canvas.height = Math.max(1, Math.round(rect.height*dpr));
+    const ctx = canvas.getContext('2d'); ctx.scale(dpr,dpr);
+    const width = rect.width, height = rect.height, left = 37, right = width-12, top = 15, bottom = height-28;
+    const rows = current?.samples || [], seconds = duration() || 15;
+    const values = rows.map(row => Math.hypot(row[1],row[2],row[3]));
+    const maxY = Math.max(2, Math.ceil(Math.max(0,...values)*1.1));
+    const x = t => left+t/seconds*(right-left), y = value => bottom-value/maxY*(bottom-top);
+    ctx.font = '11px sans-serif'; ctx.lineWidth = 1;
+    for(let i=0;i<=4;i++) { const value = maxY*i/4; ctx.strokeStyle='#edf1ef'; ctx.beginPath(); ctx.moveTo(left,y(value)); ctx.lineTo(right,y(value)); ctx.stroke(); ctx.fillStyle='#7b8782'; ctx.fillText(value.toFixed(1),3,y(value)+4); }
+    for(let i=0;i<=3;i++) { const t=seconds*i/3; ctx.fillStyle='#7b8782'; ctx.fillText(t.toFixed(0)+'s',x(t)-5,height-7); }
+    ctx.setLineDash([4,4]);ctx.strokeStyle='#a7b3ad';ctx.beginPath();ctx.moveTo(left,y(1));ctx.lineTo(right,y(1));ctx.stroke();ctx.setLineDash([]);
+    if(rows.length) {
+      ctx.strokeStyle='#237261';ctx.lineWidth=1.8;ctx.beginPath();let started=false;
+      for(let i=0;i<rows.length;i++) { const t=rows[i][0]-rows[0][0];if(t>elapsed)break;if(!started){ctx.moveTo(x(t),y(values[i]));started=true;}else ctx.lineTo(x(t),y(values[i])); }
+      ctx.stroke();
+      ctx.strokeStyle='#9ab9ab';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x(elapsed),top);ctx.lineTo(x(elapsed),bottom);ctx.stroke();
+    } else { ctx.fillStyle='#82918a';ctx.textAlign='center';ctx.fillText('选择记录后，在这里查看运动曲线',width/2,height/2);ctx.textAlign='left'; }
+    $('time').textContent = `${elapsed.toFixed(1)} / ${duration().toFixed(1)} 秒`;
+    const progress=rows.length ? Math.min(100,elapsed/seconds*100) : 0;
+    $('progress-fill').style.width=progress+'%'; document.querySelector('.progress').setAttribute('aria-valuenow',progress.toFixed(0));
+  }
+  function playback() {
+    if(playing) { playing=false;cancelAnimationFrame(animation);controls();return; }
+    if(elapsed>=duration() || eventId) reset();
+    playing=true;controls();let previous=performance.now();const generation=revision;
+    function frame(now) {
+      if(generation!==revision || !playing)return;
+      elapsed=Math.min(duration(),elapsed+(now-previous)/1000*Number($('speed').value));previous=now;draw();
+      if(elapsed>=duration()) {playing=false;controls();classify();}else animation=requestAnimationFrame(frame);
+    }
+    animation=requestAnimationFrame(frame);
+  }
+  async function classify() {
+    if(!current || busy)return;
+    clearTimeout(pollTimer);eventId=null;$('confirmation').hidden=true;
+    busy=true;controls();showError('');elapsed=duration();draw();
+    $('result-label').textContent='正在识别…';$('result-label').classList.remove('warn');$('score').textContent='';
+    const generation=revision;
+    try {
+      const result=await api(rawCsv ? '/predict-csv' : '/predict', {method:'POST',headers:{'Content-Type':rawCsv?'text/csv':'application/json'},body:rawCsv || JSON.stringify({samples:current.samples})});
+      if(generation!==revision)return;
+      const fall=result.label==='suspected_fall';
+      $('result-label').textContent=fall?'疑似跌倒':'未识别到跌倒';$('result-label').classList.toggle('warn',fall);
+      $('score').textContent=`模型分数 ${result.score.toFixed(3)} / 阈值 ${result.threshold.toFixed(3)}`;
+      let note='分数未经概率校准，仅用于本次完整记录的分类。';
+      if(current.true_label!==null && current.true_label!==undefined) {
+        const correct=Number(fall)===current.true_label;
+        note=(correct?'与公开数据标签一致。':(fall?'这是误报：公开标签为非跌倒。':'这是漏检：公开标签为跌倒。'))+' '+note;
+      }
+      $('result-note').textContent=note;
+      if(result.event) {eventId=result.event.id;renderEvent(result.event);pollEvent(generation,eventId);}
+    } catch(error) {if(generation===revision){$('result-label').textContent='识别未完成';showError(error.message);}}
+    finally {if(generation===revision){busy=false;controls();}}
+  }
+  function renderEvent(event) {
+    $('confirmation').hidden=false;$('confirm-actions').hidden=event.status!=='pending';
+    $('safe').disabled=false;$('help').disabled=false;
+    const messages={safe:'已确认安全，本次演示告警已解除。',help_requested:'已记录求助，已生成模拟家属通知。没有发送真实消息。',simulated_notification:'确认已超时，已生成模拟家属通知。没有发送真实消息。'};
+    $('event-status').textContent=event.status==='pending'?`请确认状态；约 ${Math.max(0,Math.ceil(event.deadline-Date.now()/1000))} 秒后进入模拟通知。`:messages[event.status];
+  }
+  function pollEvent(generation,id) {
+    pollTimer=setTimeout(async()=>{
+      try {const event=await api('/events/'+id);if(generation!==revision || id!==eventId)return;renderEvent(event);if(event.status==='pending')pollEvent(generation,id);}
+      catch(error){if(generation===revision && id===eventId){showError('事件状态获取失败：'+error.message);pollEvent(generation,id);}}
+    },1000);
+  }
+  async function confirm(choice) {
+    if(!eventId)return;
+    const generation=revision,id=eventId;clearTimeout(pollTimer);$('safe').disabled=true;$('help').disabled=true;
+    try {
+      const event=await api('/events/'+id+'/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({choice})});
+      if(generation===revision && id===eventId){showError('');renderEvent(event);}
+    } catch(error) {if(generation===revision && id===eventId){showError(error.message);pollEvent(generation,id);}}
+  }
+  $('connect').addEventListener('click',connect);
+  $('access-token').addEventListener('keydown',event=>{if(event.key==='Enter')connect();});
+  $('sample-select').addEventListener('change',()=>{if($('sample-select').value!=='custom')loadSample($('sample-select').value);});
+  $('csv-file').addEventListener('change',()=>loadCsv($('csv-file').files[0]));
+  $('play').addEventListener('click',playback);$('direct').addEventListener('click',classify);
+  $('safe').addEventListener('click',()=>confirm('safe'));$('help').addEventListener('click',()=>confirm('help'));
+  new ResizeObserver(draw).observe($('chart').parentElement);
+  connect();
+</script>
+</body>
+</html>

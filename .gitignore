@@ -1,0 +1,37 @@
+# Python runtime and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.coverage
+htmlcov/
+
+# App dependencies and generated outputs
+node_modules/
+.dart_tool/
+.flutter-plugins-dependencies
+.gradle/
+Pods/
+DerivedData/
+build/
+dist/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+local.properties
+*.jks
+*.keystore
+*.pem
+*.key
+
+# Local datasets and diagnostics; curated demo_samples.json is tracked
+UMAFall*.zip
+UMAFall*/
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
