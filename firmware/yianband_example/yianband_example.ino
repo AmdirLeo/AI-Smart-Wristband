@@ -22,6 +22,7 @@
  *   震动马达(DRV8837 一路) -> D1
  *   I2C 屏幕：GND->GND，3V3->3V3，SCL->D10，SDA->D9（软件 I2C，
  *             避开板载 IMU 所在的硬件 I2C D4/D5；不显示就把 SCL/SDA 对调）
+ *             支持热插拔：固件每 500ms 探测在位状态，插上自动点亮，拔掉不影响运行
  *   MAX98357A 语音播报为后续迭代，本示例用震动+LED 代替本地提示
  */
 
@@ -132,6 +133,35 @@ int readBattery() {  // XIAO A0 分压，按电池 3.55~4.2V 粗略映射
   return constrain(pct, 0, 100);
 }
 
+bool screenReady = false;   // 屏幕是否已初始化（断电/拔出后需重新 init）
+
+// 软件开漏驱动辅助（nRF52：输出低 = 拉低，输入上拉 = 释放回高）
+inline void sclLow()  { pinMode(SCREEN_SCL, OUTPUT); digitalWrite(SCREEN_SCL, LOW); }
+inline void sclHigh() { pinMode(SCREEN_SCL, INPUT_PULLUP); }
+inline void sdaLow()  { pinMode(SCREEN_SDA, OUTPUT); digitalWrite(SCREEN_SDA, LOW); }
+inline void sdaHigh() { pinMode(SCREEN_SDA, INPUT_PULLUP); }
+
+// 在位探测：对地址 0x3C 发 START+地址字节，读第 9 位 ACK（约 50us）
+bool screenPresent() {
+  sdaHigh(); sclHigh(); delayMicroseconds(4);
+  sdaLow();  delayMicroseconds(4);          // START（SCL 高时拉低 SDA）
+  sclLow();  delayMicroseconds(4);
+  for (int i = 7; i >= 0; i--) {            // 地址字节 0x78 = 0x3C<<1
+    if (0x78 & (1 << i)) sdaHigh(); else sdaLow();
+    delayMicroseconds(4);
+    sclHigh(); delayMicroseconds(4);
+    sclLow();  delayMicroseconds(4);
+  }
+  sdaHigh(); delayMicroseconds(4);          // 释放 SDA 读 ACK
+  sclHigh(); delayMicroseconds(4);
+  bool ack = (digitalRead(SCREEN_SDA) == LOW);
+  sclLow();  delayMicroseconds(4);          // STOP（SCL 高时 SDA 低->高）
+  sdaLow();  delayMicroseconds(4);
+  sclHigh(); delayMicroseconds(4);
+  sdaHigh(); delayMicroseconds(4);
+  return ack;
+}
+
 // —— 屏幕：500ms 节流刷新，显示蓝牙/电量/状态/事件提示 ——
 void drawScreen() {
   char line[40];
@@ -166,6 +196,15 @@ void screenTask() {
   uint32_t now = millis();
   if (now - lastScreenMs < 500) return;
   lastScreenMs = now;
+  if (!screenPresent()) {         // 拔出/未接：跳过绘制，标记需重新初始化
+    screenReady = false;
+    return;
+  }
+  if (!screenReady) {             // 刚插上/断电恢复：重发控制器初始化序列
+    u8g2.begin();
+    u8g2.setFont(SCREEN_FONT);
+    screenReady = true;
+  }
   if (!Bluefruit.connected()) batteryPct = readBattery();
   drawScreen();
 }
@@ -179,9 +218,12 @@ void setup() {
 
   if (imu.begin() != 0) { /* IMU 初始化失败：LED 常亮提示 */ }
 
-  u8g2.begin();
-  u8g2.enableUTF8Print();
-  u8g2.setFont(SCREEN_FONT);
+  if (screenPresent()) {
+    u8g2.begin();
+    u8g2.enableUTF8Print();
+    u8g2.setFont(SCREEN_FONT);
+    screenReady = true;
+  }
 
   Bluefruit.begin();
   Bluefruit.autoConnLed(false);
