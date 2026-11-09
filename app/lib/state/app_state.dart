@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -52,6 +53,7 @@ class AppState extends ChangeNotifier {
   final List<Recognition> events = []; // 本会话识别产生的事件（服务端无历史查询接口）
   MsEvent? activeEvent; // 正在弹窗确认的事件
   Timer? _poll;
+  int? _lastBattery; // 电量只随 st 帧更新（0.5Hz），实时指标从 20Hz raw 帧推导
 
   // —— 一次性提示（UI 消费后 clearMessages） ——
   String? lastError;
@@ -193,11 +195,6 @@ class AppState extends ChangeNotifier {
   // ———————————————— 帧处理（BLE 与演示共用） ————————————————
   void _onFrame(BandFrame f) {
     switch (f.type) {
-      case 'st':
-        samples.add(BandSample.fromJson(f.raw));
-        if (samples.length > _maxSamples) {
-          samples.removeRange(0, samples.length - _maxSamples);
-        }
       case 'raw':
         // 固件按 ≥14Hz 发送的原始六轴帧（列序同 docs/API.md）
         final row = f.arr('s');
@@ -205,12 +202,39 @@ class AppState extends ChangeNotifier {
           if (rawSource != '手环六轴') {
             rawWindow.clear();
             rawSource = '手环六轴';
+            samples.clear(); // 切到 raw 流后，实时指标改由 raw 推导
           }
           rawWindow.add(row);
           // 只保留最近约 19 秒，保证识别窗口在 10–20 秒契约内
           while (rawWindow.length > 2 &&
               rawWindow.last[0] - rawWindow.first[0] > 19.5) {
             rawWindow.removeAt(0);
+          }
+          // 实时指标从六轴推导（20Hz 刷新，st 帧只负责电量）
+          final ax = row[1], ay = row[2], az = row[3];
+          final g = sqrt(ax * ax + ay * ay + az * az);
+          final pitch = atan2(-ax, sqrt(ay * ay + az * az)) * 180 / pi;
+          final roll = atan2(ay, az) * 180 / pi;
+          samples.add(BandSample(
+            g: double.parse(g.toStringAsFixed(2)),
+            pitch: double.parse(pitch.toStringAsFixed(1)),
+            roll: double.parse(roll.toStringAsFixed(1)),
+            still: (g - 1).abs() < 0.12,
+            battery: _lastBattery,
+          ));
+          if (samples.length > _maxSamples) {
+            samples.removeRange(0, samples.length - _maxSamples);
+          }
+        }
+      case 'st':
+        final s = BandSample.fromJson(f.raw);
+        _lastBattery = s.battery ?? _lastBattery;
+        // 有 raw 流时实时页已由 raw 推导（20Hz），st 只更新电量；
+        // 没有 raw 流（演示模式）时退回 st 刷新
+        if (rawSource != '手环六轴') {
+          samples.add(s);
+          if (samples.length > _maxSamples) {
+            samples.removeRange(0, samples.length - _maxSamples);
           }
         }
     }

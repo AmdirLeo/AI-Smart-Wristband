@@ -22,7 +22,7 @@ class DemoEngine {
 
   void start() {
     stop();
-    _timer = Timer.periodic(const Duration(seconds: 2), (_) {
+    _timer = Timer.periodic(const Duration(milliseconds: 400), (_) {
       _tick();
       _ctrl.add(_stateFrame());
     });
@@ -38,7 +38,7 @@ class DemoEngine {
     _p = max(-60, min(60, _p + _rng.nextDouble() * 16 - 8));
     _r = max(-60, min(60, _r + _rng.nextDouble() * 16 - 8));
     _seq += 1;
-    if (_seq % 30 == 0 && _bat > 5) _bat -= 1;
+    if (_seq % 150 == 0 && _bat > 5) _bat -= 1; // 400ms 一帧，约每分钟掉 1%
   }
 
   Map<String, dynamic> _stateFrame() {

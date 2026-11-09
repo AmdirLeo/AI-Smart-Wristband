@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 
 import '../ble/ble_service.dart';
@@ -17,6 +18,15 @@ class _SettingsTabState extends State<SettingsTab> {
   late final _server = TextEditingController(text: '');
   late final _token = TextEditingController(text: '');
   bool _inited = false;
+  String _version = '';
+
+  @override
+  void initState() {
+    super.initState();
+    PackageInfo.fromPlatform().then((v) {
+      if (mounted) setState(() => _version = v.version);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -97,11 +107,11 @@ class _SettingsTabState extends State<SettingsTab> {
           ),
         ),
         const SizedBox(height: 12),
-        const _Card(
+        _Card(
           title: '关于',
           icon: Icons.info_outline,
           child: Text(
-            '颐安云护 App v0.2.0（对接 model_service 整段推理演示）\n\n'
+            '颐安云护 App v$_version（对接 model_service 整段推理演示）\n\n'
             '· 接口契约：仓库 docs/API.md（先公开样例联调，再接 BLE 数据）\n'
             '· 识别输入：10–20 秒六轴记录（20/50Hz，单位秒、g、°/s）\n'
             '· 事件流程：疑似跌倒 → deadline 内确认 safe / help，超时为模拟通知\n'

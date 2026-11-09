@@ -1,7 +1,7 @@
 name: yian_app
 description: "颐安云护 · AI 智能照护手环 App：BLE 接收手环数据，云端照护 API，预留 AI 分析接入。"
 publish_to: "none"
-version: 0.1.0+1
+version: 0.2.1+3
 
 environment:
   sdk: "^3.5.0"
@@ -23,6 +23,7 @@ dependencies:
   permission_handler: ^11.3.1
   # 日期格式化
   intl: ^0.19.0
+  package_info_plus: ^10.2.2
 
 dev_dependencies:
   flutter_test:

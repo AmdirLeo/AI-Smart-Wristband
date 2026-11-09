@@ -12,7 +12,7 @@ enum BandConnState { disconnected, scanning, connecting, connected }
 /// BLE 服务：扫描名为 YianBand* 的手环，连接 Nordic UART Service 收发帧。
 /// 所有 flutter_blue_plus 细节都封装在这里，App 其余部分只认 frames 流和状态。
 class BleService {
-  static const advPrefix = 'yianband';
+  static const advPrefix = 'yian';
   static const svcUuid = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
   static const txUuid = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'; // 手环→手机 Notify
   static const rxUuid = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // 手机→手环 Write
