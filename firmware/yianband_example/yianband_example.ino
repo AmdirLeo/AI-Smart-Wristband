@@ -14,15 +14,19 @@
  * 依赖（arduino-cli）：
  *   arduino-cli core install Seeeduino:nrf52
  *   arduino-cli lib install "Seeed Arduino LSM6DS3"
+ *   arduino-cli lib install U8g2
  *   （Bluefruit52Lib 为板包自带，无需额外安装；不要用 ArduinoBLE，2.x 不支持该板包）
  *
  * 接线（原型洞洞板）：
  *   SOS 按键 -> D6（另一端 GND，INPUT_PULLUP）；取消按键 -> D7
  *   震动马达(DRV8837 一路) -> D1
+ *   I2C 屏幕：GND->GND，3V3->3V3，SCL->D10，SDA->D9（软件 I2C，
+ *             避开板载 IMU 所在的硬件 I2C D4/D5；不显示就把 SCL/SDA 对调）
  *   MAX98357A 语音播报为后续迭代，本示例用震动+LED 代替本地提示
  */
 
 #include <bluefruit.h>
+#include <U8g2lib.h>
 #include <LSM6DS3.h>
 #include <math.h>
 
@@ -34,6 +38,15 @@
 
 BLEUart bleuart;                   // Nordic UART Service（NUS）
 LSM6DS3 imu(I2C_MODE, 0x6A);       // 板载 LSM6DS3TR-C
+
+// —— I2C 状态屏（软件 I2C，独立于板载 IMU 的硬件 I2C） ——
+#define SCREEN_SCL   D10           // 模块 SCL
+#define SCREEN_SDA   D9            // 模块 SDA
+// 0.96 寸 SSD1306 用下面这行；1.3 寸 SH1106 换成 U8G2_SH1106_128X64_NONAME_1_SW_I2C
+U8G2_SSD1306_128X64_NONAME_1_SW_I2C u8g2(U8G2_R0, SCREEN_SCL, SCREEN_SDA, U8X8_PIN_NONE);
+#define SCREEN_FONT u8g2_font_wqy12_t_gb2312   // 中文 12px（GB2312 全集）
+float    gNow = 1.0f;               // 供屏幕显示的最新合加速度
+uint32_t lastScreenMs = 0;
 
 // —— 上报节奏 ——
 const uint32_t RAW_PERIOD_MS   = 50;    // 20 Hz 六轴（模型输入，≥14Hz 即可）
@@ -119,6 +132,44 @@ int readBattery() {  // XIAO A0 分压，按电池 3.55~4.2V 粗略映射
   return constrain(pct, 0, 100);
 }
 
+// —— 屏幕：500ms 节流刷新，显示蓝牙/电量/状态/事件提示 ——
+void drawScreen() {
+  char line[40];
+  u8g2.clearBuffer();
+  u8g2.setFont(SCREEN_FONT);
+  snprintf(line, sizeof(line), "颐安云护  电量%d%%", batteryPct);
+  u8g2.drawUTF8(0, 12, line);
+  u8g2.drawLine(0, 15, 127, 15);
+  if (Bluefruit.connected()) {
+    u8g2.drawUTF8(0, 29, "蓝牙:已连接");
+    snprintf(line, sizeof(line), "状态:%s  g=%.2f",
+             fabsf(gNow - 1.0f) < STILL_DEV ? "静止" : "活动", gNow);
+    u8g2.drawUTF8(0, 43, line);
+  } else {
+    u8g2.drawUTF8(0, 29, "蓝牙:未连接");
+    u8g2.drawUTF8(0, 43, "等待手机连接...");
+  }
+  if (countdownActive) {
+    int left = (int32_t)(countdownEndMs - millis()) / 1000 + 1;
+    if (left < 0) left = 0;
+    snprintf(line, sizeof(line), "疑似跌倒! 倒计时%ds", left);
+    u8g2.drawUTF8(0, 60, line);
+  } else if (inImpact) {
+    u8g2.drawUTF8(0, 60, "检测到冲击...");
+  } else {
+    u8g2.drawUTF8(0, 60, "运行正常");
+  }
+  u8g2.sendBuffer();
+}
+
+void screenTask() {
+  uint32_t now = millis();
+  if (now - lastScreenMs < 500) return;
+  lastScreenMs = now;
+  if (!Bluefruit.connected()) batteryPct = readBattery();
+  drawScreen();
+}
+
 void setup() {
   pinMode(PIN_BTN_SOS, INPUT_PULLUP);
   pinMode(PIN_BTN_CANCEL, INPUT_PULLUP);
@@ -127,6 +178,10 @@ void setup() {
   analogReadResolution(10);
 
   if (imu.begin() != 0) { /* IMU 初始化失败：LED 常亮提示 */ }
+
+  u8g2.begin();
+  u8g2.enableUTF8Print();
+  u8g2.setFont(SCREEN_FONT);
 
   Bluefruit.begin();
   Bluefruit.autoConnLed(false);
@@ -146,7 +201,8 @@ void setup() {
 }
 
 void loop() {
-  if (!Bluefruit.connected()) return;
+  screenTask();                 // 屏幕 500ms 节流刷新（连接与否都刷）
+  if (!Bluefruit.connected()) { delay(20); return; }
 
   bootMs = millis();
   lastRawMs = bootMs;
@@ -154,6 +210,8 @@ void loop() {
 
   while (Bluefruit.connected()) {
     uint32_t now = millis();
+
+    screenTask();                 // 连接期间也持续刷新屏幕（内部 500ms 节流）
 
     // —— 20Hz 六轴采集 + raw 帧（模型识别输入） ——
     if (now - lastRawMs >= RAW_PERIOD_MS) {
@@ -168,6 +226,7 @@ void loop() {
 
       // —— 端侧初筛：冲击 → 持续静止 ——
       float g = readG(ax, ay, az);
+      gNow = g;
       bool still = fabsf(g - 1.0f) < STILL_DEV;
       if (!inImpact && g > IMPACT_G) { inImpact = true; gPeak = g; impactMs = now; }
       else if (inImpact && g > gPeak) gPeak = g;
