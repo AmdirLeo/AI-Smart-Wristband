@@ -20,15 +20,16 @@
  * 接线（原型洞洞板）：
  *   SOS 按键 -> D6（另一端 GND，INPUT_PULLUP）；取消按键 -> D7
  *   震动马达(DRV8837 一路) -> D1
- *   I2C 屏幕：GND->GND，3V3->3V3，SCL->D10，SDA->D9（软件 I2C，
- *             避开板载 IMU 所在的硬件 I2C D4/D5）
- *             支持热插拔：固件每 500ms 探测在位状态，插上自动点亮，拔掉不影响运行
+ *   I2C 屏幕：GND->GND，3V3->3V3，SCL->D5，SDA->D4（硬件 I2C，与板载 IMU 共享总线，
+ *             地址不同互不冲突；支持热插拔，拔插屏幕不影响运行）
  *             st 帧的 "scr" 字段为屏幕诊断：0 未检测到 / 1 检测到未初始化 / 2 已就绪
+ *             注：D10/D9 软件方案因长线时序不稳弃用（两种驱动都只写入第 0 页）
  *   MAX98357A 语音播报为后续迭代，本示例用震动+LED 代替本地提示
  */
 
 #include <bluefruit.h>
 #include <U8g2lib.h>
+#include <Wire.h>
 #include <LSM6DS3.h>
 #include <math.h>
 
@@ -45,7 +46,7 @@ LSM6DS3 imu(I2C_MODE, 0x6A);       // 板载 LSM6DS3TR-C
 // 接线固定：SCL=D10，SDA=D9；地址自动尝试 0x3C（多数屏）与 0x3D
 // 实测控制器为 SH1106（SSD1306 的水平寻址命令在 SH1106 上只能写第 0 页，
 // 症状是屏幕只显示第一行文字的上半部分）；若换成 SSD1306 的屏，改回 SSD1306 类名即可
-U8G2_SH1106_128X64_NONAME_1_SW_I2C *u8g2 = nullptr;
+U8G2_SH1106_128X64_NONAME_1_HW_I2C *u8g2 = nullptr;
 uint8_t scrAddr8 = 0x78;           // 探测到的 8 位地址（0x78=0x3C / 0x7A=0x3D）
 int     scrState = 0;              // 0 未检测到 / 1 已检测未初始化 / 2 已就绪
 bool     screenReady = false;      // 屏幕是否已初始化（断电/拔出后需重新 init）
@@ -137,33 +138,10 @@ int readBattery() {  // XIAO A0 分压，按电池 3.55~4.2V 粗略映射
   return constrain(pct, 0, 100);
 }
 
-// —— 屏幕软件 I2C 辅助（开漏模式：输出低 = 拉低，输入上拉 = 释放回高） ——
-#define SCREEN_SCL   D10
-#define SCREEN_SDA   D9
-inline void sclLow()  { pinMode(SCREEN_SCL, OUTPUT); digitalWrite(SCREEN_SCL, LOW); }
-inline void sclHigh() { pinMode(SCREEN_SCL, INPUT_PULLUP); }
-inline void sdaLow()  { pinMode(SCREEN_SDA, OUTPUT); digitalWrite(SCREEN_SDA, LOW); }
-inline void sdaHigh() { pinMode(SCREEN_SDA, INPUT_PULLUP); }
-
-// 在位探测：发 START + 地址字节，读第 9 位 ACK（约 50us）
+// 屏幕在位探测：硬件 I2C 上对地址发一次传输，NACK/错误 = 不在位
 bool screenPresent(uint8_t addr8) {
-  sdaHigh(); sclHigh(); delayMicroseconds(4);
-  sdaLow();  delayMicroseconds(4);          // START（SCL 高时拉低 SDA）
-  sclLow();  delayMicroseconds(4);
-  for (int i = 7; i >= 0; i--) {
-    if (addr8 & (1 << i)) sdaHigh(); else sdaLow();
-    delayMicroseconds(4);
-    sclHigh(); delayMicroseconds(4);
-    sclLow();  delayMicroseconds(4);
-  }
-  sdaHigh(); delayMicroseconds(4);          // 释放 SDA 读 ACK
-  sclHigh(); delayMicroseconds(4);
-  bool ack = (digitalRead(SCREEN_SDA) == LOW);
-  sclLow();  delayMicroseconds(4);          // STOP（SCL 高时 SDA 低->高）
-  sdaLow();  delayMicroseconds(4);
-  sclHigh(); delayMicroseconds(4);
-  sdaHigh(); delayMicroseconds(4);
-  return ack;
+  Wire.beginTransmission(addr8 >> 1);   // 0x78>>1 = 0x3C
+  return Wire.endTransmission() == 0;
 }
 
 // 初始化/重新初始化屏幕（重插或断电恢复后调用）
@@ -218,7 +196,7 @@ void screenTask() {
     for (int a = 0; a < 2; a++) {
       if (screenPresent(addrs[a])) {
         scrAddr8 = addrs[a];
-        u8g2 = new U8G2_SH1106_128X64_NONAME_1_SW_I2C(U8G2_R0, SCREEN_SCL, SCREEN_SDA, U8X8_PIN_NONE);
+        u8g2 = new U8G2_SH1106_128X64_NONAME_1_HW_I2C(U8G2_R0, U8X8_PIN_NONE);
         screenInit();
         return;                              // 本周期先初始化，下周期再绘制
       }
@@ -247,6 +225,7 @@ void setup() {
   analogReadResolution(10);
 
   if (imu.begin() != 0) { /* IMU 初始化失败：LED 常亮提示 */ }
+  Wire.begin();                             // 硬件 I2C（D4=SDA, D5=SCL），屏+IMU 共享
 
   Bluefruit.begin();
   Bluefruit.autoConnLed(false);
