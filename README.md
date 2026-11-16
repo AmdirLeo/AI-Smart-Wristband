@@ -51,3 +51,12 @@ python -B -m pytest -q -p no:cacheprovider model_service/test_pipeline.py model_
 同事先拉取本仓库，在 `app/` 内加入工程；建议通过功能分支和 Pull Request 合并。将服务地址设为 App 配置项，接口字段或单位变更先更新 `docs/API.md` 并协调两端修改。当前 API 无版本前缀，破坏性变更需共同确认。
 
 公开数据：Eduardo Casilari、Jose A. Santoyo-Ramón，UMAFall v8，CC BY 4.0，[DOI](https://doi.org/10.6084/m9.figshare.4214283.v8)。仓库四条样例已做手腕通道筛选、对齐和重采样；复用或展示请保留署名。上述许可描述数据来源，不代表给整个仓库代码指定了许可证。
+
+
+### SOS 按键联调
+
+更新并重启 `model_service`，安装更新后的 Flutter App，烧录 `firmware/yianband_example`。
+App 配置服务地址/口令、关闭演示模式并连接 YianBand，保持 App 在前台。
+D6–GND 长按 1.5 秒 → 手机出现「SOS 求助确认」→ D7–GND 按一下 → 事件显示「已确认安全」。
+再次长按，点手机「立即求助」验证 help_requested；另开一次求助等待 20 秒验证模拟超时通知。
+断开服务后重试应显示「提交未确认」，不会声称已通知家属。蓝牙断连时按键不处理。

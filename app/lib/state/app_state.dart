@@ -24,7 +24,7 @@ class AppState extends ChangeNotifier {
   ServiceInfo? info;
 
   // —— 手环 ——
-  final BleService ble = BleService();
+  final BleService ble;
   BandConnState bandState = BandConnState.disconnected;
   String bandName = '';
   bool bandLost = false;
@@ -61,15 +61,74 @@ class AppState extends ChangeNotifier {
 
   // —— 内部 ——
   final DemoEngine _demo = DemoEngine();
-  final TtsService tts = TtsService();
+  final TtsService tts;
   Timer? _hbTimer;
   StreamSubscription<BandFrame>? _frameSub;
   StreamSubscription<Map<String, dynamic>>? _demoSub;
   StreamSubscription<BandConnState>? _bandStateSub;
   bool _demoOn = false;
 
-  AppState() {
-    api = ModelServiceClient(baseUrl: serverUrl);
+  AppState({ModelServiceClient? client, BleService? band, TtsService? speech})
+    : ble = band ?? BleService(),
+      tts = speech ?? TtsService() {
+    api = client ?? ModelServiceClient(baseUrl: serverUrl);
+  }
+
+  Future<void> _eventQueue = Future<void>.value();
+  final Set<String> _seenBandEvents = {};
+  bool _creatingSos = false;
+  Future<void>? _sosInFlight;
+  String? _sosRequestId;
+  bool _disposed = false;
+
+  // 串行处理，确保 SOS 创建尚未返回时按取消仍对应同一个事件。
+  Future<void> handleBandEvent(BandFrame frame) {
+    final kind = frame.raw['k'];
+    if (!const ['sos', 'cancel', 'fall'].contains(kind)) return Future.value();
+    final seq = frame.raw['q'];
+    if (seq is int) {
+      final key = '$kind:$seq';
+      if (!_seenBandEvents.add(key)) return _eventQueue;
+      if (_seenBandEvents.length > 128) {
+        _seenBandEvents.remove(_seenBandEvents.first);
+      }
+    }
+    _eventQueue = _eventQueue
+        .then((_) async {
+          if (_disposed) return;
+          if (kind == 'sos') {
+            await sendSos();
+          } else if (kind == 'cancel') {
+            // 创建请求超时可能已被服务端接受，先用同一标识取回。
+            if (_sosRequestId != null) await sendSos();
+            if (_disposed || _sosRequestId != null) return;
+            final ev = activeEvent;
+            if (ev != null && !ev.status.terminal) {
+              await confirmEvent(ev, safe: true);
+            } else {
+              lastInfo = '没有待取消的求助；已发送的通知不能撤回';
+              notifyListeners();
+            }
+          } else {
+            await runPredict();
+          }
+        })
+        .catchError((Object error) {
+          if (!_disposed) {
+            lastError = '手环事件处理失败：$error';
+            notifyListeners();
+          }
+        });
+    return _eventQueue;
+  }
+
+  static String _newRequestId() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+    bytes[6] = (bytes[6] & 15) | 64;
+    bytes[8] = (bytes[8] & 63) | 128;
+    final h = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    return '${h.substring(0, 8)}-${h.substring(8, 12)}-${h.substring(12, 16)}-${h.substring(16, 20)}-${h.substring(20)}';
   }
 
   bool get demoMode => _demoOn;
@@ -159,10 +218,12 @@ class AppState extends ChangeNotifier {
   }
 
   void _onBandState(BandConnState s) {
-    if (s == BandConnState.disconnected && bandState == BandConnState.connected) {
+    if (s == BandConnState.disconnected &&
+        bandState == BandConnState.connected) {
       bandLost = true;
       lastInfo = '手环连接已断开，请检查手环电量';
     }
+    if (s == BandConnState.disconnected) _seenBandEvents.clear();
     bandState = s;
     notifyListeners();
   }
@@ -176,8 +237,9 @@ class AppState extends ChangeNotifier {
     if (v) {
       if (ble.isConnected) ble.disconnect();
       _demo.start();
-      _demoSub ??= _demo.frames.listen((m) =>
-          _onFrame(BandFrame(m['t'] as String? ?? '', m)));
+      _demoSub ??= _demo.frames.listen(
+        (m) => _onFrame(BandFrame(m['t'] as String? ?? '', m)),
+      );
       bandName = '演示模式';
       bandState = BandConnState.connected;
       bandLost = false;
@@ -195,6 +257,8 @@ class AppState extends ChangeNotifier {
   // ———————————————— 帧处理（BLE 与演示共用） ————————————————
   void _onFrame(BandFrame f) {
     switch (f.type) {
+      case 'ev':
+        unawaited(handleBandEvent(f));
       case 'raw':
         // 固件按 ≥14Hz 发送的原始六轴帧（列序同 docs/API.md）
         final row = f.arr('s');
@@ -215,13 +279,15 @@ class AppState extends ChangeNotifier {
           final g = sqrt(ax * ax + ay * ay + az * az);
           final pitch = atan2(-ax, sqrt(ay * ay + az * az)) * 180 / pi;
           final roll = atan2(ay, az) * 180 / pi;
-          samples.add(BandSample(
-            g: double.parse(g.toStringAsFixed(2)),
-            pitch: double.parse(pitch.toStringAsFixed(1)),
-            roll: double.parse(roll.toStringAsFixed(1)),
-            still: (g - 1).abs() < 0.12,
-            battery: _lastBattery,
-          ));
+          samples.add(
+            BandSample(
+              g: double.parse(g.toStringAsFixed(2)),
+              pitch: double.parse(pitch.toStringAsFixed(1)),
+              roll: double.parse(roll.toStringAsFixed(1)),
+              still: (g - 1).abs() < 0.12,
+              battery: _lastBattery,
+            ),
+          );
           if (samples.length > _maxSamples) {
             samples.removeRange(0, samples.length - _maxSamples);
           }
@@ -269,7 +335,11 @@ class AppState extends ChangeNotifier {
 
   /// 上传当前六轴窗口做跌倒分类
   Future<void> runPredict() async {
-    if (predicting) return;
+    if (predicting ||
+        _creatingSos ||
+        (activeEvent != null && !activeEvent!.status.terminal)) {
+      return;
+    }
     if (rawWindow.length < 10) {
       lastError = '还没有六轴数据：连接手环、打开演示模式或加载公开样例';
       notifyListeners();
@@ -297,7 +367,8 @@ class AppState extends ChangeNotifier {
         _startPoll(ev.id);
         await tts.speak('检测到疑似跌倒。您还好吗？如无碍请按我没事，需要帮助请按立即求助。');
       } else {
-        lastInfo = '识别：正常（分数 ${r.score.toStringAsFixed(3)} < 阈值 ${r.threshold.toStringAsFixed(3)}）';
+        lastInfo =
+            '识别：正常（分数 ${r.score.toStringAsFixed(3)} < 阈值 ${r.threshold.toStringAsFixed(3)}）';
       }
     } on ApiException catch (e) {
       lastError = '识别失败(${e.statusCode})：${e.message}';
@@ -318,11 +389,20 @@ class AppState extends ChangeNotifier {
   Future<void> _pollTick(String id) async {
     try {
       final ev = await api.event(id);
+      if (_disposed) return;
+      // 较早发出的 pending 查询不能覆盖确认响应中的终态。
+      final existing = events.where((r) => r.event.id == id).firstOrNull;
+      if (existing != null &&
+          existing.event.status.terminal &&
+          !ev.status.terminal) {
+        return;
+      }
       _upsertEvent(ev);
       if (activeEvent?.id == id) activeEvent = ev;
-      if (ev.status.terminal) _poll?.cancel();
+      if (ev.status.terminal && activeEvent?.id == id) _poll?.cancel();
     } on ApiException catch (e) {
-      if (e.statusCode == 404) {
+      if (_disposed) return;
+      if (e.statusCode == 404 && activeEvent?.id == id) {
         // 事件过期/被淘汰/服务重启：结束轮询
         _poll?.cancel();
         if (activeEvent?.id == id) activeEvent = null;
@@ -331,24 +411,29 @@ class AppState extends ChangeNotifier {
     } catch (_) {
       // 网络抖动，下一秒继续
     }
-    notifyListeners();
+    if (!_disposed) notifyListeners();
   }
 
   /// 确认安全（safe）或求助（help）。409 时按文档重新查询更新页面。
   Future<void> confirmEvent(MsEvent ev, {required bool safe}) async {
     try {
       final updated = await api.confirm(ev.id, safe: safe);
+      if (_disposed) return;
       _upsertEvent(updated);
       if (activeEvent?.id == updated.id) activeEvent = updated;
-      _poll?.cancel();
+      if (activeEvent?.id == ev.id) _poll?.cancel();
+      try {
+        await ble.send(BandProtocolParser.frameMute());
+      } catch (_) {}
       lastInfo = safe ? '已确认安全' : '已请求帮助（模拟通知）';
       if (!safe) await tts.speak('求助已提交，将生成模拟通知。');
     } on ApiException catch (e) {
+      if (_disposed) return;
       if (e.statusCode == 409) {
         lastInfo = '事件已被处理或已超时，已刷新最新状态';
         _pollTick(ev.id);
       } else if (e.statusCode == 404) {
-        _poll?.cancel();
+        if (activeEvent?.id == ev.id) _poll?.cancel();
         if (activeEvent?.id == ev.id) activeEvent = null;
         lastError = '事件已过期，请重新识别';
       } else {
@@ -357,14 +442,56 @@ class AppState extends ChangeNotifier {
     } catch (e) {
       lastError = '确认失败：$e';
     }
-    notifyListeners();
+    if (!_disposed) notifyListeners();
   }
 
-  /// SOS：当前契约没有独立 SOS 接口（docs/API.md §6），仅本地记录演示
-  Future<void> sendSos() async {
-    await tts.speak('求助信号已在本机记录。独立求助接口确定后，将自动通知家人。');
-    lastInfo = 'SOS 已本地记录（独立 SOS 接口双方待定义，见 docs/API.md §6）';
-    notifyListeners();
+  /// 独立 SOS 不依赖六轴窗口；只在服务端返回成功后显示已创建。
+  Future<void> sendSos() {
+    if (_disposed) return Future.value();
+    return _sosInFlight ??= _createSos().whenComplete(
+      () => _sosInFlight = null,
+    );
+  }
+
+  Future<void> _createSos() async {
+    if (predicting) {
+      lastError = '正在识别，请稍后再次按 SOS';
+      notifyListeners();
+      return;
+    }
+    final current = activeEvent;
+    if (current != null && !current.status.terminal) {
+      lastInfo = '已有待确认事件，请选择立即求助或我没事';
+      notifyListeners();
+      return;
+    }
+    _creatingSos = true;
+    _sosRequestId ??= _newRequestId();
+    try {
+      final ev = await api.createSos(_sosRequestId!);
+      _sosRequestId = null;
+      if (_disposed) return;
+      if (!events.any((r) => r.event.id == ev.id)) {
+        events.insert(0, Recognition(event: ev));
+      } else {
+        _upsertEvent(ev);
+      }
+      activeEvent = ev;
+      if (!ev.status.terminal) _startPoll(ev.id);
+      lastError = null;
+      lastInfo = ev.status.terminal ? '已取回 SOS 事件状态' : 'SOS 已创建，请确认求助或取消';
+      notifyListeners();
+      if (!ev.status.terminal) {
+        await tts.speak('收到求助。误触请按取消或我没事，需要帮助请按立即求助。超时将生成模拟通知。');
+      }
+    } catch (e) {
+      if (!_disposed) {
+        lastError = 'SOS 提交未确认：$e。请检查网络和服务版本后再次长按重试。';
+      }
+    } finally {
+      _creatingSos = false;
+      if (!_disposed) notifyListeners();
+    }
   }
 
   // ———————————————— 内部工具 ————————————————
@@ -382,6 +509,7 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     _poll?.cancel();
     _hbTimer?.cancel();
     _frameSub?.cancel();

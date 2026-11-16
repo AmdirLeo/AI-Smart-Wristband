@@ -30,17 +30,27 @@ class ModelServiceClient {
   }
 
   Map<String, String> _headers({bool jsonBody = true}) => {
-        if (jsonBody) 'Content-Type': 'application/json',
-        if (accessToken.isNotEmpty) 'Authorization': 'Bearer $accessToken',
-      };
+    if (jsonBody) 'Content-Type': 'application/json',
+    if (accessToken.isNotEmpty) 'Authorization': 'Bearer $accessToken',
+  };
 
-  Future<http.Response> _send(String method, String path,
-      {Object? body, bool auth = true, Duration timeout = const Duration(seconds: 10)}) {
+  Future<http.Response> _send(
+    String method,
+    String path, {
+    Object? body,
+    bool auth = true,
+    Duration timeout = const Duration(seconds: 10),
+  }) {
     final fut = switch (method) {
-      'POST' => _http.post(Uri.parse('$baseUrl$path'),
-          headers: _headers(), body: jsonEncode(body)),
-      'GET' => _http.get(Uri.parse('$baseUrl$path'),
-          headers: _headers(jsonBody: false)),
+      'POST' => _http.post(
+        Uri.parse('$baseUrl$path'),
+        headers: _headers(),
+        body: jsonEncode(body),
+      ),
+      'GET' => _http.get(
+        Uri.parse('$baseUrl$path'),
+        headers: _headers(jsonBody: false),
+      ),
       _ => _http.delete(Uri.parse('$baseUrl$path'), headers: _headers()),
     };
     return fut.timeout(timeout);
@@ -81,9 +91,24 @@ class ModelServiceClient {
 
   /// 上传整段六轴记录做跌倒分类；推理可能耗时，超时放宽到 30 秒
   Future<PredictResult> predict(List<List<double>> samples) async {
-    final j = _ok(await _send('POST', '/api/predict', body: {'samples': samples},
-        timeout: const Duration(seconds: 30)));
+    final j = _ok(
+      await _send(
+        'POST',
+        '/api/predict',
+        body: {'samples': samples},
+        timeout: const Duration(seconds: 30),
+      ),
+    );
     return PredictResult.fromJson(j);
+  }
+
+  /// 相同 requestId 重试不会重复创建或重置倒计时。
+  Future<MsEvent> createSos(String requestId) async {
+    return MsEvent.fromJson(
+      _ok(
+        await _send('POST', '/api/events/sos', body: {'request_id': requestId}),
+      ),
+    );
   }
 
   /// 查询事件；404 = 事件过期/被淘汰/服务重启（调用方应停止轮询）
@@ -93,15 +118,24 @@ class ModelServiceClient {
 
   /// 确认安全或求助；409 = 已处理或已超时（调用方应重新查询而非重试）
   Future<MsEvent> confirm(String id, {required bool safe}) async {
-    final j = _ok(await _send('POST', '/api/events/$id/confirm',
-        body: {'choice': safe ? 'safe' : 'help'}));
+    final j = _ok(
+      await _send(
+        'POST',
+        '/api/events/$id/confirm',
+        body: {'choice': safe ? 'safe' : 'help'},
+      ),
+    );
     return MsEvent.fromJson(j);
   }
 
   static List<List<double>> _parseRows(dynamic data) {
-    if (data is! List) throw ApiException(statusCode: 0, message: 'samples 字段格式异常');
+    if (data is! List) {
+      throw ApiException(statusCode: 0, message: 'samples 字段格式异常');
+    }
     return data
-        .map<List<double>>((row) => (row as List).map((v) => (v as num).toDouble()).toList())
+        .map<List<double>>(
+          (row) => (row as List).map((v) => (v as num).toDouble()).toList(),
+        )
         .toList();
   }
 

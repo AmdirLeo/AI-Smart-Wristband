@@ -20,10 +20,10 @@
  * 接线（原型洞洞板）：
  *   SOS 按键 -> D6（另一端 GND，INPUT_PULLUP）；取消按键 -> D7
  *   震动马达(DRV8837 一路) -> D1
- *   I2C 屏幕：GND->GND，3V3->3V3，SCL->D5，SDA->D4（硬件 I2C，与板载 IMU 共享总线，
- *             地址不同互不冲突；支持热插拔，拔插屏幕不影响运行）
+ *   I2C 屏幕：GND->GND，3V3->3V3，SCL->D5，SDA->D4（硬件 I2C；Sense Plus 的板载 IMU
+ *             使用独立的 Wire1 总线；支持热插拔，拔插屏幕不影响运行）
  *             st 帧的 "scr" 字段为屏幕诊断：0 未检测到 / 1 检测到未初始化 / 2 已就绪
- *             注：D10/D9 软件方案因长线时序不稳弃用（两种驱动都只写入第 0 页）
+ *             当前使用 D4/D5 硬件 I2C 和全帧缓冲刷新。
  *   MAX98357A 语音播报为后续迭代，本示例用震动+LED 代替本地提示
  */
 
@@ -32,6 +32,7 @@
 #include <Wire.h>
 #include <LSM6DS3.h>
 #include <math.h>
+#include "ButtonInput.h"
 
 #define DEVICE_NAME   "YianBand"   // 可改为 YianBand-01 等区分不同老人
 #define PIN_BTN_SOS   D6
@@ -42,11 +43,11 @@
 BLEUart bleuart;                   // Nordic UART Service（NUS）
 LSM6DS3 imu(I2C_MODE, 0x6A);       // 板载 LSM6DS3TR-C
 
-// —— I2C 状态屏（软件 I2C，独立于板载 IMU 的硬件 I2C） ——
-// 接线固定：SCL=D10，SDA=D9；地址自动尝试 0x3C（多数屏）与 0x3D
-// 实测控制器为 SH1106（SSD1306 的水平寻址命令在 SH1106 上只能写第 0 页，
-// 症状是屏幕只显示第一行文字的上半部分）；若换成 SSD1306 的屏，改回 SSD1306 类名即可
-U8G2_SH1106_128X64_NONAME_1_HW_I2C *u8g2 = nullptr;
+// —— I2C 状态屏（硬件 I2C，D4/D5；板载 IMU 使用独立 Wire1） ——
+// 接线固定：SCL=D5，SDA=D4；地址自动尝试 0x3C（多数屏）与 0x3D
+// 沿用当前 SH1106 驱动；若更换屏幕，应依据实际控制器选择对应类名。
+// 使用全帧缓冲，才能配合 clearBuffer()/sendBuffer() 刷新完整 128x64 画面。
+U8G2_SH1106_128X64_NONAME_F_HW_I2C *u8g2 = nullptr;
 uint8_t scrAddr8 = 0x78;           // 探测到的 8 位地址（0x78=0x3C / 0x7A=0x3D）
 int     scrState = 0;              // 0 未检测到 / 1 已检测未初始化 / 2 已就绪
 bool     screenReady = false;      // 屏幕是否已初始化（断电/拔出后需重新 init）
@@ -71,13 +72,17 @@ uint16_t seq = 0;
 int      batteryPct = 90;
 bool     countdownActive = false;
 uint32_t countdownEndMs = 0;
+ButtonInput sosButton, cancelButton;
+uint32_t sosNoticeUntil = 0;
 
 // 分片发送：BLEUart 内部 FIFO 一次只接受约 MTU-3 字节（默认 MTU=23 时仅 20），
 // 超长帧的剩余部分会被直接丢弃 → 必须分片 + 背压重试。
 void sendFrame(const char* json) {
   int len = strlen(json);
   int off = 0;
+  const uint32_t started = millis();
   while (off < len) {
+    if (!Bluefruit.connected() || millis() - started > 250) return;
     int n = len - off;
     if (n > 20) n = 20;   // MTU=23 时单包上限 20 字节（保守值，协商大 MTU 后同样可用）
     size_t w = bleuart.write((const uint8_t*)json + off, n);
@@ -124,6 +129,8 @@ void rxCallback(uint16_t conn_hdl) {
   }
   buf[n] = 0;
   if (n > 0 && strstr(buf, "\"mute\"") != nullptr) {
+    countdownActive = false;
+    inImpact = false;
     analogWrite(PIN_VIB, 0);
     digitalWrite(PIN_LED_STAT, LOW);
   }
@@ -172,7 +179,9 @@ void drawScreen() {
     u8g2->drawUTF8(0, 29, "蓝牙:未连接");
     u8g2->drawUTF8(0, 43, "等待手机连接...");
   }
-  if (countdownActive) {
+  if ((int32_t)(sosNoticeUntil - millis()) > 0) {
+    u8g2->drawUTF8(0, 60, "SOS请在手机确认");
+  } else if (countdownActive) {
     int left = (int32_t)(countdownEndMs - millis()) / 1000 + 1;
     if (left < 0) left = 0;
     snprintf(line, sizeof(line), "疑似跌倒! 倒计时%ds", left);
@@ -196,7 +205,7 @@ void screenTask() {
     for (int a = 0; a < 2; a++) {
       if (screenPresent(addrs[a])) {
         scrAddr8 = addrs[a];
-        u8g2 = new U8G2_SH1106_128X64_NONAME_1_HW_I2C(U8G2_R0, U8X8_PIN_NONE);
+        u8g2 = new U8G2_SH1106_128X64_NONAME_F_HW_I2C(U8G2_R0, U8X8_PIN_NONE);
         screenInit();
         return;                              // 本周期先初始化，下周期再绘制
       }
@@ -225,7 +234,7 @@ void setup() {
   analogReadResolution(10);
 
   if (imu.begin() != 0) { /* IMU 初始化失败：LED 常亮提示 */ }
-  Wire.begin();                             // 硬件 I2C（D4=SDA, D5=SCL），屏+IMU 共享
+  Wire.begin();                             // 硬件 I2C（D4=SDA, D5=SCL）
 
   Bluefruit.begin();
   Bluefruit.autoConnLed(false);
@@ -248,6 +257,8 @@ void loop() {
   screenTask();                 // 屏幕 500ms 节流刷新（连接与否都刷）
   if (!Bluefruit.connected()) { delay(20); return; }
 
+  sosButton = ButtonInput{};
+  cancelButton = ButtonInput{};
   bootMs = millis();
   lastRawMs = bootMs;
   lastStateMs = bootMs;
@@ -256,6 +267,23 @@ void loop() {
     uint32_t now = millis();
 
     screenTask();                 // 连接期间也持续刷新屏幕（内部 500ms 节流）
+
+    // 取消优先；连接期间轮询，事件不依赖本地倒计时。
+    bool sos = sosButton.update(digitalRead(PIN_BTN_SOS) == LOW, now, 1500);
+    bool cancel = cancelButton.update(digitalRead(PIN_BTN_CANCEL) == LOW, now, 0);
+    if (cancel) {
+      sendEvent("cancel", 0, 0, 1.0f);
+      countdownActive = false;
+      inImpact = false;
+      gPeak = 0;
+      stillSinceMs = 0;
+      sosNoticeUntil = 0;
+      analogWrite(PIN_VIB, 0);
+      digitalWrite(PIN_LED_STAT, LOW);
+    } else if (sos && !cancelButton.down) {
+      sendEvent("sos", 0, 0, 1.0f);
+      sosNoticeUntil = now + 3000;
+    }
 
     // —— 20Hz 六轴采集 + raw 帧（模型识别输入） ——
     if (now - lastRawMs >= RAW_PERIOD_MS) {
@@ -294,23 +322,6 @@ void loop() {
         analogWrite(PIN_VIB, 0);
         digitalWrite(PIN_LED_STAT, LOW);
       }
-
-      // —— 按键：SOS 长按 1.5s；取消 ——
-      static uint32_t sosPressMs = 0;
-      if (digitalRead(PIN_BTN_SOS) == LOW) {
-        if (sosPressMs == 0) sosPressMs = now;
-        else if (now - sosPressMs > 1500) {
-          sendEvent("sos", 0, 0, 1.0f);
-          sosPressMs = now + 3000;
-        }
-      } else sosPressMs = 0;
-      if (digitalRead(PIN_BTN_CANCEL) == LOW) {
-        if (countdownActive) sendEvent("cancel", 0, 0, 1.0f);
-        countdownActive = false;
-        analogWrite(PIN_VIB, 0);
-        digitalWrite(PIN_LED_STAT, LOW);
-        delay(300);
-      }
     }
 
     // —— 0.5Hz 状态帧（实时页展示 + 电量） ——
@@ -326,5 +337,9 @@ void loop() {
       sendState(g, pitch, roll, fabsf(g - 1.0f) < STILL_DEV);
     }
   }
+  countdownActive = false;
+  inImpact = false;
+  analogWrite(PIN_VIB, 0);
+  digitalWrite(PIN_LED_STAT, LOW);
   // 断连后 Advertising.restartOnDisconnect(true) 自动恢复广播，App 负责重连
 }

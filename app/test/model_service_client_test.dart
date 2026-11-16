@@ -5,7 +5,12 @@ import 'package:yian_app/models/models.dart';
 /// 集成测试：需要本机 model_service 在线（http://127.0.0.1:8000）。
 /// 服务未启动时自动跳过，不影响离线 CI/本地 `flutter test`。
 void main() {
-  final api = ModelServiceClient(baseUrl: 'http://127.0.0.1:8000');
+  final api = ModelServiceClient(
+    baseUrl: const String.fromEnvironment(
+      'TEST_API_URL',
+      defaultValue: 'http://127.0.0.1:8000',
+    ),
+  );
   var serviceUp = false;
 
   setUpAll(() async {
@@ -36,10 +41,26 @@ void main() {
     // 5) 重复相反确认 → 409
     await expectLater(
       api.confirm(ev.id, safe: false),
-      throwsA(isA<ApiException>()
-          .having((e) => e.statusCode, 'statusCode', 409)),
+      throwsA(
+        isA<ApiException>().having((e) => e.statusCode, 'statusCode', 409),
+      ),
     );
   }, timeout: const Timeout(Duration(seconds: 60)));
+
+  test('独立 SOS → 重试幂等 → 取消，无需六轴记录', () async {
+    if (!serviceUp) return;
+    final suffix = DateTime.now().microsecondsSinceEpoch
+        .toRadixString(16)
+        .padLeft(12, '0');
+    final id =
+        'c51960fb-02b5-40d8-98fd-${suffix.substring(suffix.length - 12)}';
+    final ev = await api.createSos(id);
+    expect(ev.isSos, isTrue);
+    expect(ev.status, MsEventStatus.pending);
+    expect((await api.createSos(id)).deadline, ev.deadline);
+    expect((await api.confirm(ev.id, safe: true)).status, MsEventStatus.safe);
+    expect((await api.createSos(id)).status, MsEventStatus.safe);
+  });
 
   test('正常样例不产生事件；不存在的事件返回 404', () async {
     if (!serviceUp) return;
@@ -49,8 +70,9 @@ void main() {
     expect(r.event, isNull);
     await expectLater(
       api.event('no-such-event'),
-      throwsA(isA<ApiException>()
-          .having((e) => e.statusCode, 'statusCode', 404)),
+      throwsA(
+        isA<ApiException>().having((e) => e.statusCode, 'statusCode', 404),
+      ),
     );
   }, timeout: const Timeout(Duration(seconds: 60)));
 }

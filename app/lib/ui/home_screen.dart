@@ -34,24 +34,27 @@ class _HomeScreenState extends State<HomeScreen> {
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: Center(
-              child: Row(children: [
-                Icon(Icons.circle, size: 9,
-                    color: state.serverOk ? AppTheme.ok : AppTheme.danger),
-                const SizedBox(width: 5),
-                Text(state.serverOk ? '服务已连接' : '服务离线',
-                    style: const TextStyle(fontSize: 12)),
-              ]),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.circle,
+                    size: 9,
+                    color: state.serverOk ? AppTheme.ok : AppTheme.danger,
+                  ),
+                  const SizedBox(width: 5),
+                  Text(
+                    state.serverOk ? '服务已连接' : '服务离线',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
       ),
       body: IndexedStack(
         index: _tab,
-        children: const [
-          LiveTab(),
-          EventsTab(),
-          SettingsTab(),
-        ],
+        children: const [LiveTab(), EventsTab(), SettingsTab()],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
@@ -59,9 +62,10 @@ class _HomeScreenState extends State<HomeScreen> {
         onDestinationSelected: (i) => setState(() => _tab = i),
         destinations: [
           const NavigationDestination(
-              icon: Icon(Icons.watch_outlined),
-              selectedIcon: Icon(Icons.watch),
-              label: '实时守护'),
+            icon: Icon(Icons.watch_outlined),
+            selectedIcon: Icon(Icons.watch),
+            label: '实时守护',
+          ),
           NavigationDestination(
             icon: Badge(
               isLabelVisible: state.events.any((r) => !r.event.status.terminal),
@@ -72,9 +76,10 @@ class _HomeScreenState extends State<HomeScreen> {
             label: '照护事件',
           ),
           const NavigationDestination(
-              icon: Icon(Icons.settings_outlined),
-              selectedIcon: Icon(Icons.settings),
-              label: '设置'),
+            icon: Icon(Icons.settings_outlined),
+            selectedIcon: Icon(Icons.settings),
+            label: '设置',
+          ),
         ],
       ),
     );
@@ -89,11 +94,13 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
         ..clearSnackBars()
-        ..showSnackBar(SnackBar(
-          content: Text(msg),
-          duration: const Duration(seconds: 3),
-          backgroundColor: isErr ? AppTheme.danger : AppTheme.primary,
-        ));
+        ..showSnackBar(
+          SnackBar(
+            content: Text(msg),
+            duration: const Duration(seconds: 3),
+            backgroundColor: isErr ? AppTheme.danger : AppTheme.primary,
+          ),
+        );
       state.clearMessages();
     });
   }
@@ -110,6 +117,10 @@ class _HomeScreenState extends State<HomeScreen> {
         barrierDismissible: false,
         builder: (_) => FallConfirmDialog(event: ev),
       );
+      if (state.activeEvent?.id == ev.id &&
+          state.activeEvent!.status.terminal) {
+        state.activeEvent = null;
+      }
       _fallDialogOpen = false;
       if (mounted) setState(() {});
     });

@@ -41,10 +41,26 @@ class _ConnectionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (text, color, icon) = switch (state.bandState) {
-      BandConnState.connected => ('已连接 · ${state.bandName}', AppTheme.ok, Icons.bluetooth_connected),
-      BandConnState.connecting => ('连接中…', AppTheme.warn, Icons.bluetooth_searching),
-      BandConnState.scanning => ('正在扫描手环…', AppTheme.warn, Icons.bluetooth_searching),
-      BandConnState.disconnected => ('手环未连接', AppTheme.muted, Icons.bluetooth_disabled),
+      BandConnState.connected => (
+        '已连接 · ${state.bandName}',
+        AppTheme.ok,
+        Icons.bluetooth_connected,
+      ),
+      BandConnState.connecting => (
+        '连接中…',
+        AppTheme.warn,
+        Icons.bluetooth_searching,
+      ),
+      BandConnState.scanning => (
+        '正在扫描手环…',
+        AppTheme.warn,
+        Icons.bluetooth_searching,
+      ),
+      BandConnState.disconnected => (
+        '手环未连接',
+        AppTheme.muted,
+        Icons.bluetooth_disabled,
+      ),
     };
     return Card(
       child: Padding(
@@ -57,8 +73,13 @@ class _ConnectionCard extends StatelessWidget {
                 Icon(icon, color: color),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text('手环：$text',
-                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                  child: Text(
+                    '手环：$text',
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ),
                 if (state.bandState == BandConnState.connected)
                   OutlinedButton(
@@ -67,7 +88,8 @@ class _ConnectionCard extends StatelessWidget {
                   )
                 else
                   FilledButton(
-                    onPressed: state.bandState == BandConnState.scanning ||
+                    onPressed:
+                        state.bandState == BandConnState.scanning ||
                             state.bandState == BandConnState.connecting
                         ? null
                         : state.connectBand,
@@ -83,14 +105,25 @@ class _ConnectionCard extends StatelessWidget {
                   color: const Color(0xFFFDF2E2),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Row(children: [
-                  Icon(Icons.warning_amber_rounded, color: AppTheme.warn, size: 18),
-                  SizedBox(width: 6),
-                  Expanded(
-                    child: Text('检测到手环断连，请检查手环电量与佩戴。',
-                        style: TextStyle(fontSize: 13, color: Color(0xFF92400E))),
-                  ),
-                ]),
+                child: const Row(
+                  children: [
+                    Icon(
+                      Icons.warning_amber_rounded,
+                      color: AppTheme.warn,
+                      size: 18,
+                    ),
+                    SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        '检测到手环断连，请检查手环电量与佩戴。',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Color(0xFF92400E),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ],
           ],
@@ -108,10 +141,14 @@ class _DemoCard extends StatelessWidget {
     final state = context.watch<AppState>();
     return Card(
       child: SwitchListTile(
-        title: const Text('演示模式',
-            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-        subtitle: const Text('没有手环时，在 App 内生成六轴动作记录（答辩演示用）',
-            style: TextStyle(fontSize: 12)),
+        title: const Text(
+          '演示模式',
+          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+        ),
+        subtitle: const Text(
+          '没有手环时，在 App 内生成六轴动作记录（答辩演示用）',
+          style: TextStyle(fontSize: 12),
+        ),
         value: state.demoMode,
         activeThumbColor: AppTheme.primary,
         onChanged: (v) => state.setDemoMode(v),
@@ -135,12 +172,20 @@ class _LiveCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Row(children: [
-              Icon(Icons.monitor_heart_outlined, size: 18, color: AppTheme.primary),
-              SizedBox(width: 6),
-              Text('实时状态',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-            ]),
+            const Row(
+              children: [
+                Icon(
+                  Icons.monitor_heart_outlined,
+                  size: 18,
+                  color: AppTheme.primary,
+                ),
+                SizedBox(width: 6),
+                Text(
+                  '实时状态',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                ),
+              ],
+            ),
             const SizedBox(height: 12),
             if (s == null)
               SizedBox(
@@ -149,7 +194,11 @@ class _LiveCard extends StatelessWidget {
                   child: Text(
                     state.demoMode ? '演示数据生成中…' : '等待手环数据…\n（连接手环或打开演示模式）',
                     textAlign: TextAlign.center,
-                    style: TextStyle(color: AppTheme.muted, fontSize: 13, height: 1.6),
+                    style: TextStyle(
+                      color: AppTheme.muted,
+                      fontSize: 13,
+                      height: 1.6,
+                    ),
                   ),
                 ),
               )
@@ -157,41 +206,56 @@ class _LiveCard extends StatelessWidget {
               Row(
                 children: [
                   Expanded(
-                      child: MetricTile(
-                          label: '合加速度',
-                          value: s.g.toStringAsFixed(2),
-                          unit: 'g',
-                          icon: Icons.speed,
-                          color: AppTheme.primary)),
+                    child: MetricTile(
+                      label: '合加速度',
+                      value: s.g.toStringAsFixed(2),
+                      unit: 'g',
+                      icon: Icons.speed,
+                      color: AppTheme.primary,
+                    ),
+                  ),
                   Expanded(
-                      child: MetricTile(
-                          label: '俯仰角',
-                          value: s.pitch.toStringAsFixed(0),
-                          unit: '°',
-                          icon: Icons.screen_rotation_alt,
-                          color: AppTheme.primaryDeep)),
+                    child: MetricTile(
+                      label: '俯仰角',
+                      value: s.pitch.toStringAsFixed(0),
+                      unit: '°',
+                      icon: Icons.screen_rotation_alt,
+                      color: AppTheme.primaryDeep,
+                    ),
+                  ),
                   Expanded(
-                      child: MetricTile(
-                          label: '状态',
-                          value: s.still ? '静止' : '活动',
-                          icon: s.still ? Icons.airline_seat_individual_suite : Icons.directions_walk,
-                          color: s.still ? AppTheme.warn : AppTheme.ok)),
+                    child: MetricTile(
+                      label: '状态',
+                      value: s.still ? '静止' : '活动',
+                      icon: s.still
+                          ? Icons.airline_seat_individual_suite
+                          : Icons.directions_walk,
+                      color: s.still ? AppTheme.warn : AppTheme.ok,
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 10),
               GSparkline(samples: state.samples),
               if (battery != null) ...[
                 const SizedBox(height: 10),
-                Row(children: [
-                  Icon(Icons.battery_alert,
+                Row(
+                  children: [
+                    Icon(
+                      Icons.battery_alert,
                       size: 16,
-                      color: battery < 20 ? AppTheme.danger : AppTheme.muted),
-                  const SizedBox(width: 4),
-                  Text('手环电量 $battery%',
+                      color: battery < 20 ? AppTheme.danger : AppTheme.muted,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '手环电量 $battery%',
                       style: TextStyle(
-                          fontSize: 12,
-                          color: battery < 20 ? AppTheme.danger : AppTheme.muted)),
-                ]),
+                        fontSize: 12,
+                        color: battery < 20 ? AppTheme.danger : AppTheme.muted,
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ],
           ],
@@ -205,7 +269,12 @@ class _LiveCard extends StatelessWidget {
 class _PredictCard extends StatelessWidget {
   const _PredictCard();
 
-  static const _sampleIds = ['normal', 'fall', 'false_positive', 'false_negative'];
+  static const _sampleIds = [
+    'normal',
+    'fall',
+    'false_positive',
+    'false_negative',
+  ];
 
   @override
   Widget build(BuildContext context) {
@@ -217,12 +286,20 @@ class _PredictCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Row(children: [
-              Icon(Icons.psychology_alt_outlined, size: 18, color: AppTheme.primary),
-              SizedBox(width: 6),
-              Text('跌倒识别',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-            ]),
+            const Row(
+              children: [
+                Icon(
+                  Icons.psychology_alt_outlined,
+                  size: 18,
+                  color: AppTheme.primary,
+                ),
+                SizedBox(width: 6),
+                Text(
+                  '跌倒识别',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                ),
+              ],
+            ),
             const SizedBox(height: 10),
             Container(
               width: double.infinity,
@@ -235,10 +312,13 @@ class _PredictCard extends StatelessWidget {
                 state.rawWindow.isEmpty
                     ? '六轴窗口：空 —— 加载公开样例、生成演示动作或连接发送 raw 帧的手环'
                     : '六轴窗口：${state.rawSource} · ${state.windowSeconds.toStringAsFixed(1)} 秒 / ${state.rawWindow.length} 行'
-                        '${state.windowReady ? '' : '（需 10–20 秒）'}',
+                          '${state.windowReady ? '' : '（需 10–20 秒）'}',
                 style: TextStyle(
-                    fontSize: 12,
-                    color: state.windowReady ? AppTheme.primaryDeep : AppTheme.muted),
+                  fontSize: 12,
+                  color: state.windowReady
+                      ? AppTheme.primaryDeep
+                      : AppTheme.muted,
+                ),
               ),
             ),
             const SizedBox(height: 10),
@@ -249,32 +329,40 @@ class _PredictCard extends StatelessWidget {
                 for (final id in _sampleIds)
                   OutlinedButton(
                     style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        visualDensity: VisualDensity.compact),
-                    onPressed:
-                        state.serverOk ? () => state.loadSample(id) : null,
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    onPressed: state.serverOk
+                        ? () => state.loadSample(id)
+                        : null,
                     child: Text('样例 $id', style: const TextStyle(fontSize: 12)),
                   ),
               ],
             ),
             const SizedBox(height: 10),
-            Row(children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: state.demoMode ? () => state.demoRun(fall: false) : null,
-                  icon: const Icon(Icons.directions_walk, size: 18),
-                  label: const Text('演示·正常'),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: state.demoMode
+                        ? () => state.demoRun(fall: false)
+                        : null,
+                    icon: const Icon(Icons.directions_walk, size: 18),
+                    label: const Text('演示·正常'),
+                  ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: state.demoMode ? () => state.demoRun(fall: true) : null,
-                  icon: const Icon(Icons.personal_injury, size: 18),
-                  label: const Text('演示·跌倒'),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: state.demoMode
+                        ? () => state.demoRun(fall: true)
+                        : null,
+                    icon: const Icon(Icons.personal_injury, size: 18),
+                    label: const Text('演示·跌倒'),
+                  ),
                 ),
-              ),
-            ]),
+              ],
+            ),
             const SizedBox(height: 10),
             SizedBox(
               width: double.infinity,
@@ -283,15 +371,24 @@ class _PredictCard extends StatelessWidget {
                   backgroundColor: AppTheme.primary,
                   padding: const EdgeInsets.symmetric(vertical: 12),
                 ),
-                onPressed: state.serverOk && state.windowReady && !state.predicting
+                onPressed:
+                    state.serverOk && state.windowReady && !state.predicting
                     ? state.runPredict
                     : null,
                 icon: state.predicting
-                    ? const SizedBox(width: 18, height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
                     : const Icon(Icons.play_arrow, size: 20),
-                label: Text(state.predicting ? '识别中…' : '运行跌倒识别',
-                    style: const TextStyle(fontSize: 15)),
+                label: Text(
+                  state.predicting ? '识别中…' : '运行跌倒识别',
+                  style: const TextStyle(fontSize: 15),
+                ),
               ),
             ),
             if (result != null) ...[
@@ -300,8 +397,9 @@ class _PredictCard extends StatelessWidget {
                 width: double.infinity,
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: (result.isSuspectedFall ? AppTheme.danger : AppTheme.ok)
-                      .withValues(alpha: 0.08),
+                  color:
+                      (result.isSuspectedFall ? AppTheme.danger : AppTheme.ok)
+                          .withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Text(
@@ -309,9 +407,12 @@ class _PredictCard extends StatelessWidget {
                   '（阈值 ${result.threshold.toStringAsFixed(3)}）\n'
                   '分数为未校准分类分数，不代表跌倒概率（见 docs/API.md §4）',
                   style: TextStyle(
-                      fontSize: 12,
-                      height: 1.5,
-                      color: result.isSuspectedFall ? AppTheme.danger : AppTheme.ok),
+                    fontSize: 12,
+                    height: 1.5,
+                    color: result.isSuspectedFall
+                        ? AppTheme.danger
+                        : AppTheme.ok,
+                  ),
                 ),
               ),
             ],
@@ -322,7 +423,7 @@ class _PredictCard extends StatelessWidget {
   }
 }
 
-/// 长按 1.5 秒触发 SOS（当前契约无独立 SOS 接口，仅本地演示）
+/// 长按 1.5 秒触发 SOS（创建服务端待确认事件）
 class _SosButton extends StatefulWidget {
   const _SosButton();
 
@@ -340,7 +441,9 @@ class _SosButtonState extends State<_SosButton> {
     setState(() => _progress = 0.02);
     final begin = DateTime.now();
     _timer = Timer.periodic(const Duration(milliseconds: 50), (t) {
-      final p = DateTime.now().difference(begin).inMilliseconds / _hold.inMilliseconds;
+      final p =
+          DateTime.now().difference(begin).inMilliseconds /
+          _hold.inMilliseconds;
       if (p >= 1) {
         t.cancel();
         _timer = null;
@@ -387,15 +490,22 @@ class _SosButtonState extends State<_SosButton> {
                     children: [
                       Icon(Icons.emergency, color: Colors.white, size: 30),
                       SizedBox(width: 10),
-                      Text('长按 SOS 求助',
-                          style: TextStyle(
-                              color: Colors.white, fontSize: 21,
-                              fontWeight: FontWeight.w800, letterSpacing: 2)),
+                      Text(
+                        '长按 SOS 求助',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 21,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 2,
+                        ),
+                      ),
                     ],
                   ),
                   SizedBox(height: 4),
-                  Text('独立 SOS 接口确定前仅本机记录',
-                      style: TextStyle(color: Colors.white70, fontSize: 11)),
+                  Text(
+                    '确认或超时后生成模拟通知',
+                    style: TextStyle(color: Colors.white70, fontSize: 11),
+                  ),
                 ],
               ),
             ),

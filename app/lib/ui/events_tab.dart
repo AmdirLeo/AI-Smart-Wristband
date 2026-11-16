@@ -22,8 +22,10 @@ class EventsTab extends StatelessWidget {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-          child: Text('仅显示本次运行识别的事件（服务端事件保存在内存，1 小时内有效）',
-              style: TextStyle(fontSize: 12, color: AppTheme.muted)),
+          child: Text(
+            '仅显示本次运行的事件（服务端事件保存在内存，1 小时内有效）',
+            style: TextStyle(fontSize: 12, color: AppTheme.muted),
+          ),
         ),
         Expanded(
           child: items.isEmpty
@@ -31,13 +33,21 @@ class EventsTab extends StatelessWidget {
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.receipt_long_outlined, size: 44, color: Colors.grey.shade300),
+                      Icon(
+                        Icons.receipt_long_outlined,
+                        size: 44,
+                        color: Colors.grey.shade300,
+                      ),
                       const SizedBox(height: 10),
-                      const Text('暂无事件',
-                          style: TextStyle(color: AppTheme.muted)),
+                      const Text(
+                        '暂无事件',
+                        style: TextStyle(color: AppTheme.muted),
+                      ),
                       const SizedBox(height: 6),
-                      const Text('到「实时守护」页运行跌倒识别',
-                          style: TextStyle(color: AppTheme.muted, fontSize: 12)),
+                      const Text(
+                        '到「实时守护」页长按 SOS 或运行跌倒识别',
+                        style: TextStyle(color: AppTheme.muted, fontSize: 12),
+                      ),
                     ],
                   ),
                 )
@@ -61,7 +71,7 @@ class _EventCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final ev = rec.event;
-    final danger = rec.result.isSuspectedFall;
+    final danger = ev.isSos || (rec.result?.isSuspectedFall ?? false);
     return Card(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
@@ -70,53 +80,67 @@ class _EventCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(danger ? Icons.personal_injury : Icons.directions_walk,
-                    size: 18, color: danger ? AppTheme.danger : AppTheme.ok),
+                Icon(
+                  danger ? Icons.personal_injury : Icons.directions_walk,
+                  size: 18,
+                  color: danger ? AppTheme.danger : AppTheme.ok,
+                ),
                 const SizedBox(width: 6),
-                Text(rec.title,
-                    style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: danger ? AppTheme.danger : AppTheme.ok)),
+                Text(
+                  rec.title,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: danger ? AppTheme.danger : AppTheme.ok,
+                  ),
+                ),
                 const SizedBox(width: 8),
                 StatusChip(ev.status),
                 const Spacer(),
-                Text(DateFormat('MM-dd HH:mm:ss').format(rec.at),
-                    style: const TextStyle(fontSize: 12, color: AppTheme.muted)),
+                Text(
+                  DateFormat('MM-dd HH:mm:ss').format(rec.at),
+                  style: const TextStyle(fontSize: 12, color: AppTheme.muted),
+                ),
               ],
             ),
             const SizedBox(height: 8),
             Text(
-              '分数 ${rec.result.score.toStringAsFixed(3)} / 阈值 ${rec.result.threshold.toStringAsFixed(3)}'
+              '${rec.result == null ? '手动求助' : '分数 ${rec.result!.score.toStringAsFixed(3)} / 阈值 ${rec.result!.threshold.toStringAsFixed(3)}'}'
               '${ev.reason == null ? '' : ' · ${_reasonText(ev.reason!)}'}'
               ' · 事件 ${ev.shortId}',
               style: const TextStyle(fontSize: 12, color: AppTheme.muted),
             ),
             const SizedBox(height: 4),
-            Text(_hint(ev.status), style: const TextStyle(fontSize: 12, color: AppTheme.muted)),
+            Text(
+              _hint(ev.status),
+              style: const TextStyle(fontSize: 12, color: AppTheme.muted),
+            ),
             if (ev.status == MsEventStatus.pending) ...[
               const SizedBox(height: 10),
-              Row(children: [
-                Expanded(
-                  child: OutlinedButton(
-                    style: OutlinedButton.styleFrom(
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
                         foregroundColor: AppTheme.ok,
-                        side: const BorderSide(color: AppTheme.ok)),
-                    onPressed: () =>
-                        state.confirmEvent(ev, safe: true),
-                    child: const Text('我没事', style: TextStyle(fontSize: 13)),
+                        side: const BorderSide(color: AppTheme.ok),
+                      ),
+                      onPressed: () => state.confirmEvent(ev, safe: true),
+                      child: const Text('我没事', style: TextStyle(fontSize: 13)),
+                    ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: FilledButton(
-                    style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
-                    onPressed: () =>
-                        state.confirmEvent(ev, safe: false),
-                    child: const Text('需要帮助', style: TextStyle(fontSize: 13)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FilledButton(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppTheme.danger,
+                      ),
+                      onPressed: () => state.confirmEvent(ev, safe: false),
+                      child: const Text('需要帮助', style: TextStyle(fontSize: 13)),
+                    ),
                   ),
-                ),
-              ]),
+                ],
+              ),
             ],
           ],
         ),
@@ -125,15 +149,15 @@ class _EventCard extends StatelessWidget {
   }
 
   String _reasonText(String reason) => switch (reason) {
-        'user_confirmation' => '用户确认',
-        'confirmation_timeout' => '确认超时',
-        _ => reason,
-      };
+    'user_confirmation' => '用户确认',
+    'confirmation_timeout' => '确认超时',
+    _ => reason,
+  };
 
   String _hint(MsEventStatus s) => switch (s) {
-        MsEventStatus.pending => '等待用户确认（每秒轮询服务端状态）',
-        MsEventStatus.safe => '用户已确认安全（App 文案：已确认安全）',
-        MsEventStatus.helpRequested => '已生成模拟通知（演示环境不会真实联系家属）',
-        MsEventStatus.simulatedNotification => '已超时，已生成模拟通知（演示环境不会真实联系家属）',
-      };
+    MsEventStatus.pending => '等待用户确认（每秒轮询服务端状态）',
+    MsEventStatus.safe => '用户已确认安全（App 文案：已确认安全）',
+    MsEventStatus.helpRequested => '已生成模拟通知（演示环境不会真实联系家属）',
+    MsEventStatus.simulatedNotification => '已超时，已生成模拟通知（演示环境不会真实联系家属）',
+  };
 }

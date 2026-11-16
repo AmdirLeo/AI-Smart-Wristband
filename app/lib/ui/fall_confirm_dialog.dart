@@ -29,11 +29,6 @@ class _FallConfirmDialogState extends State<FallConfirmDialog> {
   void initState() {
     super.initState();
     _left = widget.event.remainingSeconds;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        context.read<AppState>().tts.speak('检测到疑似跌倒。您还好吗？如无碍请按我没事，需要帮助请按立即求助。');
-      }
-    });
     _ticker = Timer.periodic(const Duration(milliseconds: 500), (_) {
       if (!mounted) return;
       final ev = context.read<AppState>().activeEvent ?? widget.event;
@@ -51,7 +46,8 @@ class _FallConfirmDialogState extends State<FallConfirmDialog> {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final ev = state.activeEvent ?? widget.event;
-    final pending = ev.status == MsEventStatus.pending;
+    final missing = state.activeEvent == null;
+    final pending = !missing && ev.status == MsEventStatus.pending;
     final total = state.info?.confirmSeconds ?? 20;
 
     return PopScope(
@@ -78,16 +74,33 @@ class _FallConfirmDialogState extends State<FallConfirmDialog> {
                       strokeCap: StrokeCap.round,
                     ),
                   ),
-                  Text(pending ? '$_left' : '!',
-                      style: const TextStyle(fontSize: 40, fontWeight: FontWeight.w800)),
+                  Text(
+                    pending ? '$_left' : '!',
+                    style: const TextStyle(
+                      fontSize: 40,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 18),
-              Text(_title(ev), style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w800)),
+              Text(
+                missing ? '事件已失效' : _title(ev),
+                style: const TextStyle(
+                  fontSize: 21,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
               const SizedBox(height: 6),
-              Text(_subtitle(ev),
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 14, color: AppTheme.muted, height: 1.5)),
+              Text(
+                missing ? '服务可能已重启，请关闭后重新发起求助。' : _subtitle(ev),
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: AppTheme.muted,
+                  height: 1.5,
+                ),
+              ),
               const SizedBox(height: 22),
               if (pending)
                 Row(
@@ -97,12 +110,22 @@ class _FallConfirmDialogState extends State<FallConfirmDialog> {
                         style: OutlinedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 14),
                           foregroundColor: AppTheme.ok,
-                          side: const BorderSide(color: AppTheme.ok, width: 1.6),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          side: const BorderSide(
+                            color: AppTheme.ok,
+                            width: 1.6,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
                         ),
                         onPressed: () => _confirm(context, safe: true),
-                        child: const Text('我没事',
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                        child: const Text(
+                          '我没事',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -111,11 +134,18 @@ class _FallConfirmDialogState extends State<FallConfirmDialog> {
                         style: FilledButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 14),
                           backgroundColor: AppTheme.danger,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
                         ),
                         onPressed: () => _confirm(context, safe: false),
-                        child: const Text('立即求助',
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                        child: const Text(
+                          '立即求助',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                       ),
                     ),
                   ],
@@ -145,17 +175,16 @@ class _FallConfirmDialogState extends State<FallConfirmDialog> {
   }
 
   String _title(MsEvent ev) => switch (ev.status) {
-        MsEventStatus.pending => '检测到疑似跌倒',
-        MsEventStatus.safe => '已确认安全',
-        MsEventStatus.helpRequested => '已请求帮助',
-        MsEventStatus.simulatedNotification => '确认超时',
-      };
+    MsEventStatus.pending => ev.isSos ? 'SOS 求助确认' : '检测到疑似跌倒',
+    MsEventStatus.safe => '已确认安全',
+    MsEventStatus.helpRequested => '已请求帮助',
+    MsEventStatus.simulatedNotification => '确认超时',
+  };
 
   String _subtitle(MsEvent ev) => switch (ev.status) {
-        MsEventStatus.pending =>
-          '您还好吗？\n如无碍请按「我没事」，需要帮助请按「立即求助」',
-        MsEventStatus.safe => '已确认安全，事件已记录（reason: user_confirmation）',
-        MsEventStatus.helpRequested => '已生成模拟通知（演示环境不会真实联系家属）',
-        MsEventStatus.simulatedNotification => '超过确认时限，已生成模拟通知\n（演示环境不会真实联系家属）',
-      };
+    MsEventStatus.pending => '您还好吗？\n如无碍请按「我没事」，需要帮助请按「立即求助」',
+    MsEventStatus.safe => '已确认安全，事件已记录',
+    MsEventStatus.helpRequested => '已生成模拟通知（演示环境不会真实联系家属）',
+    MsEventStatus.simulatedNotification => '超过确认时限，已生成模拟通知\n（演示环境不会真实联系家属）',
+  };
 }

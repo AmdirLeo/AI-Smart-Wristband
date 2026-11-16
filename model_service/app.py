@@ -39,6 +39,11 @@ class SignalInput(BaseModel):
     samples: list[Sample] = Field(min_length=3, max_length=MAX_SAMPLES)
 
 
+class SosInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: uuid.UUID
+
+
 class Confirmation(BaseModel):
     model_config = ConfigDict(extra="forbid")
     choice: str = Field(pattern="^(safe|help)$")
@@ -133,6 +138,30 @@ def create_app(model_path: Path | None = None, samples_path: Path | None = None,
         refresh_event(event)
         return event
 
+    def create_event_locked(kind, event_id):
+        now = time.time()
+        for key in list(app.state.events):
+            if now - app.state.events[key]["created_at"] >= EVENT_TTL:
+                del app.state.events[key]
+        if event_id in app.state.events:
+            event = get_event_locked(event_id)
+            if event["kind"] != kind:
+                raise HTTPException(409, "请求标识已用于其他事件。")
+            return event
+        if len(app.state.events) >= MAX_EVENTS:
+            raise HTTPException(503, "演示事件容量已满，请稍后重试。")
+        event = {"id": event_id, "kind": kind, "status": "pending", "created_at": now,
+                 "deadline": now + CONFIRM_SECONDS, "reason": None,
+                 "notification_mode": "simulation_only"}
+        app.state.events[event_id] = event
+        return event
+
+    @api.post("/events/sos")
+    async def create_sos(request: Request):
+        payload = validated_json(SosInput, await limited_body(request))
+        with app.state.event_lock:
+            return deepcopy(create_event_locked("sos", str(payload.request_id)))
+
     def classify(payload: SignalInput):
         values = np.asarray(payload.samples, dtype=float)
         try:
@@ -145,18 +174,8 @@ def create_app(model_path: Path | None = None, samples_path: Path | None = None,
         result["event"] = None
         result["mode"] = "whole_trial_demo"
         if result["label"] == "suspected_fall":
-            now = time.time()
-            event = {"id": str(uuid.uuid4()), "status": "pending", "created_at": now,
-                     "deadline": now + CONFIRM_SECONDS, "reason": None,
-                     "notification_mode": "simulation_only"}
             with app.state.event_lock:
-                for key in list(app.state.events):
-                    if now - app.state.events[key]["created_at"] >= EVENT_TTL:
-                        del app.state.events[key]
-                if len(app.state.events) >= MAX_EVENTS:
-                    del app.state.events[next(iter(app.state.events))]
-                app.state.events[event["id"]] = event
-            result["event"] = deepcopy(event)
+                result["event"] = deepcopy(create_event_locked("fall", str(uuid.uuid4())))
         return result
 
     @api.post("/predict")

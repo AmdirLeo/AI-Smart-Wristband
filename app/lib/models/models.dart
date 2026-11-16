@@ -48,8 +48,9 @@ class ServiceInfo {
     return ServiceInfo(
       name: j['name'] as String? ?? '',
       mode: j['mode'] as String? ?? '',
-      columns:
-          ((j['columns'] as List?) ?? const []).map((c) => c.toString()).toList(),
+      columns: ((j['columns'] as List?) ?? const [])
+          .map((c) => c.toString())
+          .toList(),
       confirmSeconds: (j['confirm_seconds'] as num?)?.toInt() ?? 20,
     );
   }
@@ -86,7 +87,9 @@ class PredictResult {
       label: FallLabelX.from(j['label'] as String),
       score: (j['score'] as num).toDouble(),
       threshold: (j['threshold'] as num).toDouble(),
-      event: j['event'] == null ? null : MsEvent.fromJson(j['event'] as Map<String, dynamic>),
+      event: j['event'] == null
+          ? null
+          : MsEvent.fromJson(j['event'] as Map<String, dynamic>),
     );
   }
 }
@@ -96,21 +99,21 @@ enum MsEventStatus { pending, safe, helpRequested, simulatedNotification }
 
 extension MsEventStatusX on MsEventStatus {
   String get label => switch (this) {
-        MsEventStatus.pending => '待确认',
-        MsEventStatus.safe => '已确认安全',
-        MsEventStatus.helpRequested => '已请求帮助',
-        MsEventStatus.simulatedNotification => '超时·模拟通知',
-      };
+    MsEventStatus.pending => '待确认',
+    MsEventStatus.safe => '已确认安全',
+    MsEventStatus.helpRequested => '已请求帮助',
+    MsEventStatus.simulatedNotification => '超时·模拟通知',
+  };
 
   /// 终态（safe / help_requested / simulated_notification），终态后停止轮询
   bool get terminal => this != MsEventStatus.pending;
 
   static MsEventStatus from(String s) => switch (s) {
-        'safe' => MsEventStatus.safe,
-        'help_requested' => MsEventStatus.helpRequested,
-        'simulated_notification' => MsEventStatus.simulatedNotification,
-        _ => MsEventStatus.pending,
-      };
+    'safe' => MsEventStatus.safe,
+    'help_requested' => MsEventStatus.helpRequested,
+    'simulated_notification' => MsEventStatus.simulatedNotification,
+    _ => MsEventStatus.pending,
+  };
 }
 
 /// 照护事件：推理响应的 event 字段与 GET /api/events/{id} 返回一致。
@@ -121,6 +124,8 @@ class MsEvent {
   final double createdAt;
   final double deadline;
   final String? reason;
+  final String kind;
+  bool get isSos => kind == 'sos';
 
   MsEvent({
     required this.id,
@@ -128,6 +133,7 @@ class MsEvent {
     required this.createdAt,
     required this.deadline,
     this.reason,
+    this.kind = 'fall',
   });
 
   factory MsEvent.fromJson(Map<String, dynamic> j) {
@@ -137,6 +143,7 @@ class MsEvent {
       createdAt: (j['created_at'] as num).toDouble(),
       deadline: (j['deadline'] as num).toDouble(),
       reason: j['reason'] as String?,
+      kind: j['kind'] as String? ?? 'fall',
     );
   }
 
@@ -155,18 +162,19 @@ class MsEvent {
       createdAt: createdAt,
       deadline: deadline,
       reason: reason ?? this.reason,
+      kind: kind,
     );
   }
 }
 
 /// 一次识别的完整记录（结果 + 事件），用于事件列表展示
 class Recognition {
-  final PredictResult result;
+  final PredictResult? result;
   final DateTime at;
   MsEvent event;
 
-  Recognition({required this.result, required this.event, DateTime? at})
-      : at = at ?? DateTime.now();
+  Recognition({this.result, required this.event, DateTime? at})
+    : at = at ?? DateTime.now();
 
-  String get title => result.isSuspectedFall ? '疑似跌倒事件' : '正常记录';
+  String get title => event.isSos ? 'SOS 求助' : '疑似跌倒事件';
 }
