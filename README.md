@@ -55,8 +55,12 @@ python -B -m pytest -q -p no:cacheprovider model_service/test_pipeline.py model_
 
 ### SOS 按键联调
 
-更新并重启 `model_service`，安装更新后的 Flutter App，烧录 `firmware/yianband_example`。
-App 配置服务地址/口令、关闭演示模式并连接 YianBand，保持 App 在前台。
-D6–GND 长按 1.5 秒 → 手机出现「SOS 求助确认」→ D7–GND 按一下 → 事件显示「已确认安全」。
-再次长按，点手机「立即求助」验证 help_requested；另开一次求助等待 20 秒验证模拟超时通知。
-断开服务后重试应显示「提交未确认」，不会声称已通知家属。蓝牙断连时按键不处理。
+老人操作手表，App 面向监护人。更新并重启 `model_service`，安装新版 App，烧录 `firmware/yianband_example`。
+App 配置服务地址/口令，关闭演示模式并连接 YianBand，保持在前台。
+D6–GND 长按 1.5 秒 → 监护人手机立即显示“老人紧急求助”并语音提醒，无需老人手机确认，也不等待 20 秒。
+D7–GND 按一下 → 显示“老人已取消 SOS”，保留原告警记录；监护人需自行核实老人情况。
+“我已知晓”仅关闭提醒，不取消求助；断开云端服务后，BLE SOS 仍应在本机告警并显示云端未同步，可在记录页重试。
+模拟 SOS 入口只在演示模式显示。蓝牙断连时按键不处理。
+
+当前仅支持附近手机 BLE 前台联调，没有远程推送或后台常驻保证；服务端不发送短信或拨打电话。
+App 记录/待同步队列为本次进程内存；服务端记录有效期 1 小时，重启后清空。

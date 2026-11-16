@@ -56,10 +56,10 @@ void main() {
         'c51960fb-02b5-40d8-98fd-${suffix.substring(suffix.length - 12)}';
     final ev = await api.createSos(id);
     expect(ev.isSos, isTrue);
-    expect(ev.status, MsEventStatus.pending);
+    expect(ev.status, MsEventStatus.helpRequested);
     expect((await api.createSos(id)).deadline, ev.deadline);
-    expect((await api.confirm(ev.id, safe: true)).status, MsEventStatus.safe);
-    expect((await api.createSos(id)).status, MsEventStatus.safe);
+    expect((await api.cancelSos(ev.id)).status, MsEventStatus.cancelled);
+    expect((await api.createSos(id)).status, MsEventStatus.cancelled);
   });
 
   test('正常样例不产生事件；不存在的事件返回 404', () async {

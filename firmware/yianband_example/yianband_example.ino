@@ -180,7 +180,7 @@ void drawScreen() {
     u8g2->drawUTF8(0, 43, "等待手机连接...");
   }
   if ((int32_t)(sosNoticeUntil - millis()) > 0) {
-    u8g2->drawUTF8(0, 60, "SOS请在手机确认");
+    u8g2->drawUTF8(0, 60, "SOS已触发");
   } else if (countdownActive) {
     int left = (int32_t)(countdownEndMs - millis()) / 1000 + 1;
     if (left < 0) left = 0;

@@ -27,7 +27,7 @@ class LiveTab extends StatelessWidget {
         const SizedBox(height: 12),
         const _PredictCard(),
         const SizedBox(height: 12),
-        const _SosButton(),
+        if (state.demoMode) const _SosButton(),
         const SizedBox(height: 30),
       ],
     );
@@ -423,7 +423,7 @@ class _PredictCard extends StatelessWidget {
   }
 }
 
-/// 长按 1.5 秒触发 SOS（创建服务端待确认事件）
+/// 监护人联调用的 SOS 模拟入口；日常求助来自老人手表
 class _SosButton extends StatefulWidget {
   const _SosButton();
 
@@ -491,7 +491,7 @@ class _SosButtonState extends State<_SosButton> {
                       Icon(Icons.emergency, color: Colors.white, size: 30),
                       SizedBox(width: 10),
                       Text(
-                        '长按 SOS 求助',
+                        '长按模拟 SOS',
                         style: TextStyle(
                           color: Colors.white,
                           fontSize: 21,
@@ -503,7 +503,7 @@ class _SosButtonState extends State<_SosButton> {
                   ),
                   SizedBox(height: 4),
                   Text(
-                    '确认或超时后生成模拟通知',
+                    '测试监护人告警，立即触发',
                     style: TextStyle(color: Colors.white70, fontSize: 11),
                   ),
                 ],

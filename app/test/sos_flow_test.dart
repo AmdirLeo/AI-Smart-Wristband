@@ -14,49 +14,50 @@ import 'package:yian_app/state/app_state.dart';
 class FakeApi extends ModelServiceClient {
   FakeApi() : super(baseUrl: 'http://localhost');
   final ids = <String>[];
-  final choices = <bool>[];
+  final cancelled = <String>[];
   Completer<void>? gate;
   bool fail = false;
-  bool missing = false;
-  MsEvent? stored;
+  bool failCancel = false;
+  bool legacy = false;
+  final stored = <String, MsEvent>{};
   @override
-  Future<MsEvent> createSos(String requestId) async {
-    ids.add(requestId);
-    stored ??= MsEvent(
-      id: requestId,
-      kind: 'sos',
-      status: MsEventStatus.pending,
-      createdAt: 0,
-      deadline: DateTime.now().millisecondsSinceEpoch / 1000 + 20,
+  Future<MsEvent> createSos(String id) async {
+    ids.add(id);
+    stored.putIfAbsent(
+      id,
+      () => MsEvent(
+        id: id,
+        kind: 'sos',
+        status: legacy ? MsEventStatus.pending : MsEventStatus.helpRequested,
+        createdAt: 0,
+        deadline: 0,
+      ),
     );
     if (fail) throw TimeoutException('response lost');
     if (gate != null) await gate!.future;
-    return stored!;
+    return stored[id]!;
   }
 
   @override
-  Future<MsEvent> confirm(String id, {required bool safe}) async {
-    if (missing) throw ApiException(statusCode: 404, message: 'expired');
-    expect(id, stored!.id);
-    choices.add(safe);
-    stored = stored!.copyWith(
-      status: safe ? MsEventStatus.safe : MsEventStatus.helpRequested,
+  Future<MsEvent> cancelSos(String id) async {
+    if (failCancel) throw TimeoutException('cancel response lost');
+    cancelled.add(id);
+    return stored[id] = stored[id]!.copyWith(
+      status: MsEventStatus.cancelled,
+      reason: 'wearer_cancelled',
     );
-    return stored!;
   }
 }
 
 class FakeSpeech extends TtsService {
+  final spoken = <String>[];
   @override
-  Future<void> speak(String text) async {}
-}
-
-class FakeBand extends BleService {
-  int sent = 0;
-  @override
-  Future<void> send(List<int> bytes) async {
-    sent++;
+  Future<void> speak(String text) async {
+    spoken.add(text);
   }
+
+  @override
+  Future<void> stop() async {}
 }
 
 BandFrame event(String kind, int seq) => BandFrame('ev', {'k': kind, 'q': seq});
@@ -64,98 +65,128 @@ BandFrame event(String kind, int seq) => BandFrame('ev', {'k': kind, 'q': seq});
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late FakeApi api;
-  late FakeBand band;
+  late FakeSpeech speech;
   late AppState state;
   setUp(() {
     api = FakeApi();
-    band = FakeBand();
-    state = AppState(client: api, band: band, speech: FakeSpeech());
+    speech = FakeSpeech();
+    state = AppState(client: api, band: BleService(), speech: speech);
   });
   tearDown(() => state.dispose());
 
-  test('BLE SOS creates a real event once; duplicate is ignored; cancel confirms safe', () async {
-    await state.handleBandEvent(event('sos', 1));
-    await state.handleBandEvent(event('sos', 1));
-    expect(api.ids, hasLength(1));
-    expect(state.activeEvent!.isSos, isTrue);
-    expect(state.events.single.result, isNull);
-    await state.handleBandEvent(event('cancel', 2));
-    expect(api.choices, [true]);
-    expect(state.activeEvent!.status, MsEventStatus.safe);
-    expect(band.sent, 1);
-  });
-  test('cancel arriving before create response waits for its event', () async {
+  test(
+    'SOS alarms immediately without waiting for cloud or prediction',
+    () async {
+      api.gate = Completer<void>();
+      state.predicting = true;
+      final sending = state.handleBandEvent(event('sos', 1));
+      expect(state.activeEvent!.status, MsEventStatus.helpRequested);
+      expect(state.events.single.result, isNull);
+      expect(speech.spoken.single, contains('紧急求助'));
+      expect(state.sosNeedsSync(state.activeEvent!.id), isTrue);
+      api.gate!.complete();
+      await sending;
+      expect(state.sosNeedsSync(state.activeEvent!.id), isFalse);
+      await state.handleBandEvent(event('sos', 1));
+      expect(api.ids, hasLength(1));
+    },
+  );
+
+  test('cancel before create response updates guardian immediately and persists later', () async {
     api.gate = Completer<void>();
-    final sos = state.handleBandEvent(event('sos', 1));
-    final cancel = state.handleBandEvent(event('cancel', 2));
-    await Future<void>.delayed(Duration.zero);
-    expect(api.ids, hasLength(1));
-    expect(api.choices, isEmpty);
+    final sending = state.handleBandEvent(event('sos', 1));
+    final cancelling = state.handleBandEvent(event('cancel', 2));
+    expect(state.activeEvent!.status, MsEventStatus.cancelled);
+    expect(speech.spoken.last, contains('老人已取消'));
     api.gate!.complete();
-    await Future.wait([sos, cancel]);
-    expect(state.events.single.event.status, MsEventStatus.safe);
+    await Future.wait([sending, cancelling]);
+    expect(state.events.single.event.status, MsEventStatus.cancelled);
+    expect(api.stored.values.single.status, MsEventStatus.cancelled);
   });
-  test('lost response reports failure and retry reuses request id', () async {
+
+  test('failed cloud submission retains alarm and retry reuses id', () async {
     api.fail = true;
     await state.sendSos();
-    expect(state.activeEvent, isNull);
-    expect(state.lastError, contains('提交未确认'));
-    api.fail = false;
-    await state.sendSos();
-    expect(api.ids[0], api.ids[1]);
-    expect(state.events, hasLength(1));
-    await state.confirmEvent(state.activeEvent!, safe: false);
+    final id = state.activeEvent!.id;
     expect(state.activeEvent!.status, MsEventStatus.helpRequested);
-  });
-  test('cancel after a lost SOS response recovers same event', () async {
-    api.fail = true;
-    await state.handleBandEvent(event('sos', 1));
+    expect(state.lastError, contains('云端同步未确认'));
     api.fail = false;
-    await state.handleBandEvent(event('cancel', 2));
-    expect(api.ids[0], api.ids[1]);
-    expect(state.activeEvent!.status, MsEventStatus.safe);
+    await state.retrySosSync(id);
+    expect(api.ids, [id, id]);
+    expect(state.events, hasLength(1));
+    expect(state.sosNeedsSync(id), isFalse);
   });
-  test('phone SOS in flight can be cancelled by hardware button', () async {
-    api.gate = Completer<void>();
-    final submit = state.sendSos();
-    final cancel = state.handleBandEvent(event('cancel', 9));
-    await Future<void>.delayed(Duration.zero);
-    expect(api.choices, isEmpty);
-    api.gate!.complete();
-    await Future.wait([submit, cancel]);
-    expect(api.ids, hasLength(1));
-    expect(state.activeEvent!.status, MsEventStatus.safe);
-  });
-  test('failed recovery keeps cancellation uncertain', () async {
-    api.fail = true;
-    await state.handleBandEvent(event('sos', 1));
-    await state.handleBandEvent(event('cancel', 2));
-    expect(api.ids[0], api.ids[1]);
-    expect(api.choices, isEmpty);
-    expect(state.lastError, contains('提交未确认'));
-    expect(state.lastInfo, isNull);
-  });
-  testWidgets('expired event leaves a dismissible dialog', (tester) async {
+
+  test(
+    'cancel after guardian dismissed alarm still updates retained record',
+    () async {
+      await state.sendSos();
+      state.activeEvent = null;
+      await state.handleBandEvent(event('cancel', 2));
+      expect(state.activeEvent!.status, MsEventStatus.cancelled);
+      expect(state.events, hasLength(1));
+      expect(api.cancelled, hasLength(1));
+    },
+  );
+
+  test(
+    'failed cancellation sync retains local cancellation and can retry',
+    () async {
+      await state.sendSos();
+      api.failCancel = true;
+      await state.handleBandEvent(event('cancel', 2));
+      final id = state.activeEvent!.id;
+      expect(state.activeEvent!.status, MsEventStatus.cancelled);
+      expect(state.sosNeedsSync(id), isTrue);
+      api.failCancel = false;
+      await state.retrySosSync(id);
+      expect(api.stored[id]!.status, MsEventStatus.cancelled);
+      expect(state.sosNeedsSync(id), isFalse);
+    },
+  );
+
+  test('new SOS after cancellation creates a new alarm', () async {
     await state.sendSos();
-    final ev = state.activeEvent!;
-    await tester.pumpWidget(
-      ChangeNotifierProvider.value(
-        value: state,
-        child: MaterialApp(home: FallConfirmDialog(event: ev)),
-      ),
-    );
-    expect(find.text('SOS 求助确认'), findsOneWidget);
-    api.missing = true;
-    await state.confirmEvent(ev, safe: true);
-    await tester.pump();
-    expect(find.text('事件已失效'), findsOneWidget);
-    expect(find.text('知道了'), findsOneWidget);
-    expect(tester.widget<PopScope>(find.byType(PopScope)).canPop, isTrue);
-    await tester.pumpWidget(const SizedBox());
+    await state.handleBandEvent(event('cancel', 2));
+    await state.handleBandEvent(event('sos', 3));
+    expect(state.events, hasLength(2));
+    expect(state.events.first.event.status, MsEventStatus.helpRequested);
+    expect(state.events.last.event.status, MsEventStatus.cancelled);
   });
-  test('cancel without pending event does not fabricate success', () async {
+
+  test('old server cannot silently reinstate confirmation flow', () async {
+    api.legacy = true;
+    await state.sendSos();
+    expect(state.activeEvent!.status, MsEventStatus.helpRequested);
+    expect(state.lastError, contains('更新服务端'));
+  });
+
+  testWidgets(
+    'guardian sees alarm and cancellation with no confirmation or countdown',
+    (tester) async {
+      await state.sendSos();
+      final ev = state.activeEvent!;
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: state,
+          child: MaterialApp(home: FallConfirmDialog(event: ev)),
+        ),
+      );
+      expect(find.text('老人紧急求助'), findsOneWidget);
+      expect(find.text('我已知晓'), findsOneWidget);
+      expect(find.text('我没事'), findsNothing);
+      expect(find.text('立即求助'), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      await state.handleBandEvent(event('cancel', 2));
+      await tester.pump();
+      expect(find.text('老人已取消 SOS'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  test('cancel without an alarm does not fabricate a record', () async {
     await state.handleBandEvent(event('cancel', 3));
-    expect(api.choices, isEmpty);
-    expect(state.lastInfo, contains('没有待取消'));
+    expect(api.cancelled, isEmpty);
+    expect(state.events, isEmpty);
   });
 }

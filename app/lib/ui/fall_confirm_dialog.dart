@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../core/theme.dart';
 import '../models/models.dart';
 import '../state/app_state.dart';
+import 'sos_alert_dialog.dart';
 
 /// 跌倒确认弹窗（对齐 docs/API.md §5）：
 /// - 倒计时以服务端 deadline 为准（confirm_seconds 从 /api/info 获取，当前 20 秒）；
@@ -46,6 +47,7 @@ class _FallConfirmDialogState extends State<FallConfirmDialog> {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final ev = state.activeEvent ?? widget.event;
+    if (ev.isSos) return SosAlertDialog(event: ev);
     final missing = state.activeEvent == null;
     final pending = !missing && ev.status == MsEventStatus.pending;
     final total = state.info?.confirmSeconds ?? 20;
@@ -120,7 +122,7 @@ class _FallConfirmDialogState extends State<FallConfirmDialog> {
                         ),
                         onPressed: () => _confirm(context, safe: true),
                         child: const Text(
-                          '我没事',
+                          '已核实安全',
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w700,
@@ -140,7 +142,7 @@ class _FallConfirmDialogState extends State<FallConfirmDialog> {
                         ),
                         onPressed: () => _confirm(context, safe: false),
                         child: const Text(
-                          '立即求助',
+                          '需要帮助',
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w700,
@@ -158,7 +160,12 @@ class _FallConfirmDialogState extends State<FallConfirmDialog> {
                       backgroundColor: AppTheme.primary,
                       padding: const EdgeInsets.symmetric(vertical: 14),
                     ),
-                    onPressed: () => Navigator.of(context).pop(),
+                    onPressed: () {
+                      if (state.activeEvent?.id == ev.id) {
+                        state.activeEvent = null;
+                      }
+                      Navigator.of(context).pop();
+                    },
                     child: const Text('知道了', style: TextStyle(fontSize: 16)),
                   ),
                 ),
@@ -175,14 +182,16 @@ class _FallConfirmDialogState extends State<FallConfirmDialog> {
   }
 
   String _title(MsEvent ev) => switch (ev.status) {
-    MsEventStatus.pending => ev.isSos ? 'SOS 求助确认' : '检测到疑似跌倒',
+    MsEventStatus.cancelled => '老人已取消',
+    MsEventStatus.pending => '检测到疑似跌倒',
     MsEventStatus.safe => '已确认安全',
     MsEventStatus.helpRequested => '已请求帮助',
     MsEventStatus.simulatedNotification => '确认超时',
   };
 
   String _subtitle(MsEvent ev) => switch (ev.status) {
-    MsEventStatus.pending => '您还好吗？\n如无碍请按「我没事」，需要帮助请按「立即求助」',
+    MsEventStatus.cancelled => '原告警记录已保留，请核实老人情况',
+    MsEventStatus.pending => '请核实老人情况，再标记安全或请求帮助。',
     MsEventStatus.safe => '已确认安全，事件已记录',
     MsEventStatus.helpRequested => '已生成模拟通知（演示环境不会真实联系家属）',
     MsEventStatus.simulatedNotification => '超过确认时限，已生成模拟通知\n（演示环境不会真实联系家属）',

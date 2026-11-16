@@ -111,6 +111,11 @@ class ModelServiceClient {
     );
   }
 
+  /// 老人取消已发出的 SOS；服务端保留原告警记录。
+  Future<MsEvent> cancelSos(String id) async {
+    return MsEvent.fromJson(_ok(await _send('POST', '/api/events/$id/cancel')));
+  }
+
   /// 查询事件；404 = 事件过期/被淘汰/服务重启（调用方应停止轮询）
   Future<MsEvent> event(String id) async {
     return MsEvent.fromJson(_ok(await _send('GET', '/api/events/$id')));

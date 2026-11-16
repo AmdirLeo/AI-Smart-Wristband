@@ -11,17 +11,28 @@ class StatusChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (color, bg) = switch (status) {
+      MsEventStatus.cancelled => (AppTheme.warn, const Color(0xFFFDF2E2)),
       MsEventStatus.pending => (AppTheme.warn, const Color(0xFFFDF2E2)),
       MsEventStatus.safe => (AppTheme.ok, const Color(0xFFE8F6EC)),
       MsEventStatus.helpRequested => (AppTheme.accent, const Color(0xFFFDEEE2)),
-      MsEventStatus.simulatedNotification => (AppTheme.muted, const Color(0xFFEEF1F4)),
+      MsEventStatus.simulatedNotification => (
+        AppTheme.muted,
+        const Color(0xFFEEF1F4),
+      ),
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+      ),
       child: Text(
         status.label,
-        style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w600),
+        style: TextStyle(
+          fontSize: 12,
+          color: color,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
@@ -56,11 +67,16 @@ class MetricTile extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.baseline,
           textBaseline: TextBaseline.alphabetic,
           children: [
-            Text(value,
-                style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700)),
+            Text(
+              value,
+              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
+            ),
             if (unit != null) ...[
               const SizedBox(width: 2),
-              Text(unit!, style: TextStyle(fontSize: 12, color: AppTheme.muted)),
+              Text(
+                unit!,
+                style: TextStyle(fontSize: 12, color: AppTheme.muted),
+              ),
             ],
           ],
         ),
@@ -104,7 +120,8 @@ class _GPainter extends CustomPainter {
       maxV = mid + 0.25;
     }
 
-    double yOf(double v) => size.height - (v - minV) / (maxV - minV) * size.height;
+    double yOf(double v) =>
+        size.height - (v - minV) / (maxV - minV) * size.height;
 
     // 1.0g 基准线
     final base = Paint()

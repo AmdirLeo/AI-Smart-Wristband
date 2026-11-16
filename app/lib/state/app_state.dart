@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../ble/band_protocol.dart';
@@ -74,52 +75,67 @@ class AppState extends ChangeNotifier {
     api = client ?? ModelServiceClient(baseUrl: serverUrl);
   }
 
-  Future<void> _eventQueue = Future<void>.value();
   final Set<String> _seenBandEvents = {};
-  bool _creatingSos = false;
-  Future<void>? _sosInFlight;
-  String? _sosRequestId;
+  final Set<String> _unsyncedSos = {};
+  final Map<String, Future<void>> _sosSyncJobs = {};
+  String? _lastSosId;
   bool _disposed = false;
 
-  // 串行处理，确保 SOS 创建尚未返回时按取消仍对应同一个事件。
+  bool sosNeedsSync(String id) => _unsyncedSos.contains(id);
+  bool sosSyncing(String id) => _sosSyncJobs.containsKey(id);
+
   Future<void> handleBandEvent(BandFrame frame) {
+    if (_disposed) return Future.value();
     final kind = frame.raw['k'];
     if (!const ['sos', 'cancel', 'fall'].contains(kind)) return Future.value();
     final seq = frame.raw['q'];
     if (seq is int) {
-      final key = '$kind:$seq';
-      if (!_seenBandEvents.add(key)) return _eventQueue;
+      if (!_seenBandEvents.add('$kind:$seq')) return Future.value();
       if (_seenBandEvents.length > 128) {
         _seenBandEvents.remove(_seenBandEvents.first);
       }
     }
-    _eventQueue = _eventQueue
-        .then((_) async {
-          if (_disposed) return;
-          if (kind == 'sos') {
-            await sendSos();
-          } else if (kind == 'cancel') {
-            // 创建请求超时可能已被服务端接受，先用同一标识取回。
-            if (_sosRequestId != null) await sendSos();
-            if (_disposed || _sosRequestId != null) return;
-            final ev = activeEvent;
-            if (ev != null && !ev.status.terminal) {
-              await confirmEvent(ev, safe: true);
-            } else {
-              lastInfo = '没有待取消的求助；已发送的通知不能撤回';
-              notifyListeners();
-            }
-          } else {
-            await runPredict();
-          }
-        })
-        .catchError((Object error) {
-          if (!_disposed) {
-            lastError = '手环事件处理失败：$error';
-            notifyListeners();
-          }
-        });
-    return _eventQueue;
+    // SOS 与取消立即更新监护人界面，不排在推理或 HTTP 请求后面。
+    if (kind == 'sos') return sendSos();
+    if (kind == 'cancel') return _cancelFromBand();
+    return runPredict();
+  }
+
+  Future<void> _cancelFromBand() async {
+    final rec = events.where((r) => r.event.id == _lastSosId).firstOrNull;
+    final current = activeEvent;
+    if (current != null &&
+        !current.isSos &&
+        !current.status.terminal &&
+        (rec == null || current.createdAt > rec.event.createdAt)) {
+      await confirmEvent(current, safe: true);
+      return;
+    }
+    if (rec != null && rec.event.status != MsEventStatus.cancelled) {
+      final ev = rec.event.copyWith(
+        status: MsEventStatus.cancelled,
+        reason: 'wearer_cancelled',
+      );
+      rec.event = ev;
+      activeEvent = ev;
+      _unsyncedSos.add(ev.id);
+      lastInfo = '老人已取消 SOS，原告警记录保留，请核实老人情况';
+      notifyListeners();
+      unawaited(tts.speak('老人已取消求助，请核实老人情况。'));
+      // 创建在途时，先等待同一事件落库，再补交取消，不能被迟到响应覆盖。
+      final pending = _sosSyncJobs[ev.id];
+      if (pending != null) await pending;
+      if (!_disposed && _unsyncedSos.contains(ev.id)) await retrySosSync(ev.id);
+    } else if (rec != null && _unsyncedSos.contains(rec.event.id)) {
+      await retrySosSync(rec.event.id);
+    } else if (activeEvent != null &&
+        !activeEvent!.isSos &&
+        !activeEvent!.status.terminal) {
+      await confirmEvent(activeEvent!, safe: true);
+    } else {
+      lastInfo = '没有待取消的求助';
+      notifyListeners();
+    }
   }
 
   static String _newRequestId() {
@@ -335,9 +351,7 @@ class AppState extends ChangeNotifier {
 
   /// 上传当前六轴窗口做跌倒分类
   Future<void> runPredict() async {
-    if (predicting ||
-        _creatingSos ||
-        (activeEvent != null && !activeEvent!.status.terminal)) {
+    if (predicting || (activeEvent != null && !activeEvent!.status.terminal)) {
       return;
     }
     if (rawWindow.length < 10) {
@@ -363,9 +377,14 @@ class AppState extends ChangeNotifier {
       final ev = r.event;
       if (ev != null) {
         events.insert(0, Recognition(result: r, event: ev));
-        activeEvent = ev;
-        _startPoll(ev.id);
-        await tts.speak('检测到疑似跌倒。您还好吗？如无碍请按我没事，需要帮助请按立即求助。');
+        // 推理结果不能覆盖正在展示的 SOS。
+        if (activeEvent?.isSos != true) {
+          activeEvent = ev;
+          _startPoll(ev.id);
+        }
+        if (activeEvent?.isSos != true) {
+          await tts.speak('检测到老人疑似跌倒，请立即核实老人情况。');
+        }
       } else {
         lastInfo =
             '识别：正常（分数 ${r.score.toStringAsFixed(3)} < 阈值 ${r.threshold.toStringAsFixed(3)}）';
@@ -445,53 +464,78 @@ class AppState extends ChangeNotifier {
     if (!_disposed) notifyListeners();
   }
 
-  /// 独立 SOS 不依赖六轴窗口；只在服务端返回成功后显示已创建。
+  /// BLE 收到 SOS 就向监护人告警；云端同步不阻塞本机告警。
   Future<void> sendSos() {
     if (_disposed) return Future.value();
-    return _sosInFlight ??= _createSos().whenComplete(
-      () => _sosInFlight = null,
+    final last = events.where((r) => r.event.id == _lastSosId).firstOrNull;
+    if (last != null &&
+        sosNeedsSync(last.event.id) &&
+        last.event.status != MsEventStatus.cancelled) {
+      activeEvent = last.event;
+      notifyListeners();
+      return retrySosSync(last.event.id);
+    }
+    final now = DateTime.now().millisecondsSinceEpoch / 1000;
+    final ev = MsEvent(
+      id: _newRequestId(),
+      kind: 'sos',
+      status: MsEventStatus.helpRequested,
+      createdAt: now,
+      deadline: now,
+      reason: 'sos_button',
     );
+    _poll?.cancel();
+    _lastSosId = ev.id;
+    events.insert(0, Recognition(event: ev));
+    activeEvent = ev;
+    _unsyncedSos.add(ev.id);
+    lastError = null;
+    lastInfo = '收到老人 SOS，请立即查看并联系老人';
+    notifyListeners();
+    unawaited(tts.speak('紧急求助！老人按下了 SOS，请立即查看并联系老人。'));
+    unawaited(HapticFeedback.heavyImpact().catchError((Object _) {}));
+    return retrySosSync(ev.id);
   }
 
-  Future<void> _createSos() async {
-    if (predicting) {
-      lastError = '正在识别，请稍后再次按 SOS';
-      notifyListeners();
-      return;
-    }
-    final current = activeEvent;
-    if (current != null && !current.status.terminal) {
-      lastInfo = '已有待确认事件，请选择立即求助或我没事';
-      notifyListeners();
-      return;
-    }
-    _creatingSos = true;
-    _sosRequestId ??= _newRequestId();
+  Future<void> retrySosSync(String id) {
+    if (_disposed) return Future.value();
+    final existing = _sosSyncJobs[id];
+    if (existing != null) return existing;
+    final job = _syncSos(id).whenComplete(() {
+      _sosSyncJobs.remove(id);
+      if (!_disposed) notifyListeners();
+    });
+    _sosSyncJobs[id] = job;
+    notifyListeners();
+    return job;
+  }
+
+  Future<void> _syncSos(String id) async {
     try {
-      final ev = await api.createSos(_sosRequestId!);
-      _sosRequestId = null;
+      var remote = await api.createSos(id);
       if (_disposed) return;
-      if (!events.any((r) => r.event.id == ev.id)) {
-        events.insert(0, Recognition(event: ev));
-      } else {
-        _upsertEvent(ev);
+      if (remote.status == MsEventStatus.pending) {
+        throw StateError('服务端仍使用旧版 SOS 确认流程，请更新服务端');
       }
-      activeEvent = ev;
-      if (!ev.status.terminal) _startPoll(ev.id);
+      final local = events.firstWhere((r) => r.event.id == id);
+      if (local.event.status == MsEventStatus.cancelled) {
+        remote = await api.cancelSos(id);
+        if (_disposed) return;
+      }
+      // 取消可能在请求发出后到达，迟到的求助响应不能恢复已取消状态。
+      if (local.event.status != MsEventStatus.cancelled ||
+          remote.status == MsEventStatus.cancelled) {
+        _upsertEvent(remote);
+        if (activeEvent?.id == id) activeEvent = remote;
+        _unsyncedSos.remove(id);
+      }
       lastError = null;
-      lastInfo = ev.status.terminal ? '已取回 SOS 事件状态' : 'SOS 已创建，请确认求助或取消';
-      notifyListeners();
-      if (!ev.status.terminal) {
-        await tts.speak('收到求助。误触请按取消或我没事，需要帮助请按立即求助。超时将生成模拟通知。');
-      }
     } catch (e) {
       if (!_disposed) {
-        lastError = 'SOS 提交未确认：$e。请检查网络和服务版本后再次长按重试。';
+        lastError = '本机已收到手表消息，云端同步未确认：$e。可在告警记录中重试同步。';
       }
-    } finally {
-      _creatingSos = false;
-      if (!_disposed) notifyListeners();
     }
+    if (!_disposed) notifyListeners();
   }
 
   // ———————————————— 内部工具 ————————————————

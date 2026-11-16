@@ -135,36 +135,37 @@ def test_retrained_model_requires_matching_demo_bundle(tmp_path):
             pass
 
 
-def test_sos_creation_retry_and_cancel(client):
+def test_sos_immediate_alarm_and_cancel_preserves_record(client):
     request_id = "c51960fb-02b5-40d8-98fd-894eafef93f0"
     body = {"request_id": request_id}
     assert client.post("/api/events/sos", json=body,
                        headers={"Authorization": ""}).status_code == 401
     event = client.post("/api/events/sos", json=body).json()
     assert event["kind"] == "sos"
-    assert event["status"] == "pending"
+    assert event["status"] == "help_requested"
+    assert event["alerted_at"] == event["created_at"] == event["deadline"]
+    assert event["reason"] == "sos_button"
     assert "score" not in event
     assert client.post("/api/events/sos", json=body).json() == event
-    assert client.post(f"/api/events/{request_id}/confirm",
-                       json={"choice": "safe"}).json()["status"] == "safe"
-    assert client.post("/api/events/sos", json=body).json()["status"] == "safe"
+    url = f"/api/events/{request_id}"
+    # No second confirmation, nor a pending timeout, even long after SOS.
+    client.app.state.events[request_id]["deadline"] = 0
+    assert client.get(url).json()["status"] == "help_requested"
+    assert client.post(url + "/confirm", json={"choice": "safe"}).status_code == 409
+    assert client.post(url + "/cancel", headers={"Authorization": ""}).status_code == 401
+    cancelled = client.post(url + "/cancel").json()
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["reason"] == "wearer_cancelled"
+    assert cancelled["alerted_at"] == event["alerted_at"]
+    assert cancelled["created_at"] == event["created_at"]
+    assert cancelled["cancelled_at"] >= event["alerted_at"]
+    assert client.post(url + "/cancel").json() == cancelled
+    assert client.post("/api/events/sos", json=body).json() == cancelled
     assert len(client.app.state.events) == 1
 
 
-def test_sos_help_timeout_and_invalid_requests(client):
+def test_sos_invalid_requests(client):
     for body in [{}, {"request_id": "invalid"}, {"request_id":
                  "c51960fb-02b5-40d8-98fd-894eafef93f0", "kind": "fall"}]:
         assert client.post("/api/events/sos", json=body).status_code == 422
-    for i in (1, 2):
-        event = client.post("/api/events/sos", json={
-            "request_id": f"c51960fb-02b5-40d8-98fd-894eafef93f{i}"}).json()
-        url = f"/api/events/{event['id']}"
-        if i == 1:
-            result = client.post(url + "/confirm", json={"choice": "help"}).json()
-            assert result["status"] == "help_requested"
-        else:
-            client.app.state.events[event["id"]]["deadline"] = 0
-            result = client.get(url).json()
-            assert result["status"] == "simulated_notification"
-        assert result["notification_mode"] == "simulation_only"
-        assert client.post(url + "/confirm", json={"choice": "safe"}).status_code == 409
+    assert client.post("/api/events/missing/cancel").status_code == 404

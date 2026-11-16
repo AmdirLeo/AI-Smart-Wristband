@@ -45,7 +45,7 @@ class EventsTab extends StatelessWidget {
                       ),
                       const SizedBox(height: 6),
                       const Text(
-                        '到「实时守护」页长按 SOS 或运行跌倒识别',
+                        '连接手表后接收老人 SOS，或开启演示测试',
                         style: TextStyle(color: AppTheme.muted, fontSize: 12),
                       ),
                     ],
@@ -112,9 +112,20 @@ class _EventCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              _hint(ev.status),
+              ev.isSos
+                  ? (ev.status == MsEventStatus.cancelled
+                        ? '老人已取消，原告警记录保留，请核实老人情况'
+                        : '已收到老人 SOS，请立即查看并联系老人')
+                  : _hint(ev.status),
               style: const TextStyle(fontSize: 12, color: AppTheme.muted),
             ),
+            if (ev.isSos && state.sosNeedsSync(ev.id))
+              TextButton(
+                onPressed: state.sosSyncing(ev.id)
+                    ? null
+                    : () => state.retrySosSync(ev.id),
+                child: Text(state.sosSyncing(ev.id) ? '正在同步云端…' : '云端未同步，点击重试'),
+              ),
             if (ev.status == MsEventStatus.pending) ...[
               const SizedBox(height: 10),
               Row(
@@ -126,7 +137,10 @@ class _EventCard extends StatelessWidget {
                         side: const BorderSide(color: AppTheme.ok),
                       ),
                       onPressed: () => state.confirmEvent(ev, safe: true),
-                      child: const Text('我没事', style: TextStyle(fontSize: 13)),
+                      child: const Text(
+                        '已核实安全',
+                        style: TextStyle(fontSize: 13),
+                      ),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -149,13 +163,16 @@ class _EventCard extends StatelessWidget {
   }
 
   String _reasonText(String reason) => switch (reason) {
-    'user_confirmation' => '用户确认',
+    'sos_button' => '手表 SOS',
+    'wearer_cancelled' => '老人按键取消',
+    'user_confirmation' => '已确认',
     'confirmation_timeout' => '确认超时',
     _ => reason,
   };
 
   String _hint(MsEventStatus s) => switch (s) {
-    MsEventStatus.pending => '等待用户确认（每秒轮询服务端状态）',
+    MsEventStatus.cancelled => '老人已取消，告警记录保留',
+    MsEventStatus.pending => '请核实老人情况',
     MsEventStatus.safe => '用户已确认安全（App 文案：已确认安全）',
     MsEventStatus.helpRequested => '已生成模拟通知（演示环境不会真实联系家属）',
     MsEventStatus.simulatedNotification => '已超时，已生成模拟通知（演示环境不会真实联系家属）',

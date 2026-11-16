@@ -95,20 +95,28 @@ class PredictResult {
 }
 
 /// 事件状态（docs/API.md §5）
-enum MsEventStatus { pending, safe, helpRequested, simulatedNotification }
+enum MsEventStatus {
+  pending,
+  safe,
+  helpRequested,
+  simulatedNotification,
+  cancelled,
+}
 
 extension MsEventStatusX on MsEventStatus {
   String get label => switch (this) {
+    MsEventStatus.cancelled => '老人已取消',
     MsEventStatus.pending => '待确认',
     MsEventStatus.safe => '已确认安全',
     MsEventStatus.helpRequested => '已请求帮助',
     MsEventStatus.simulatedNotification => '超时·模拟通知',
   };
 
-  /// 终态（safe / help_requested / simulated_notification），终态后停止轮询
+  /// 不再需要确认倒计时；SOS 的 help_requested 仍可由老人按键取消。
   bool get terminal => this != MsEventStatus.pending;
 
   static MsEventStatus from(String s) => switch (s) {
+    'cancelled' => MsEventStatus.cancelled,
     'safe' => MsEventStatus.safe,
     'help_requested' => MsEventStatus.helpRequested,
     'simulated_notification' => MsEventStatus.simulatedNotification,

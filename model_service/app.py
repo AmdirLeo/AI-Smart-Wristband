@@ -153,6 +153,9 @@ def create_app(model_path: Path | None = None, samples_path: Path | None = None,
         event = {"id": event_id, "kind": kind, "status": "pending", "created_at": now,
                  "deadline": now + CONFIRM_SECONDS, "reason": None,
                  "notification_mode": "simulation_only"}
+        if kind == "sos":
+            event.update(status="help_requested", deadline=now, reason="sos_button",
+                         alerted_at=now, cancelled_at=None)
         app.state.events[event_id] = event
         return event
 
@@ -161,6 +164,17 @@ def create_app(model_path: Path | None = None, samples_path: Path | None = None,
         payload = validated_json(SosInput, await limited_body(request))
         with app.state.event_lock:
             return deepcopy(create_event_locked("sos", str(payload.request_id)))
+
+    @api.post("/events/{event_id}/cancel")
+    def cancel_sos(event_id: str):
+        with app.state.event_lock:
+            event = get_event_locked(event_id)
+            if event["kind"] != "sos":
+                raise HTTPException(409, "此接口仅用于手表取消 SOS。")
+            if event["status"] != "cancelled":
+                event.update(status="cancelled", reason="wearer_cancelled",
+                             cancelled_at=time.time())
+            return deepcopy(event)
 
     def classify(payload: SignalInput):
         values = np.asarray(payload.samples, dtype=float)
@@ -213,6 +227,8 @@ def create_app(model_path: Path | None = None, samples_path: Path | None = None,
         target = "safe" if payload.choice == "safe" else "help_requested"
         with app.state.event_lock:
             event = get_event_locked(event_id)
+            if event["kind"] == "sos":
+                raise HTTPException(409, "SOS 已立即告警，无需确认；老人取消请使用 cancel 接口。")
             if event["status"] == target:
                 return deepcopy(event)
             if event["status"] != "pending":
