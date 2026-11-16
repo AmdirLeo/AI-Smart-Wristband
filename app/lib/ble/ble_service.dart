@@ -97,30 +97,36 @@ class BleService {
         if (s.uuid.str.toLowerCase() == svcUuid) nus = s;
       }
       if (nus == null) throw Exception('未找到 Nordic UART 服务（固件未按协议广播？）');
+      bool hasNotifications = false;
       for (final c in nus.characteristics) {
         final u = c.uuid.str.toLowerCase();
         if (u == txUuid) {
-          await c.setNotifyValue(true);
-          _notifySub?.cancel();
+          await _notifySub?.cancel();
           _notifySub = c.onValueReceived.listen((v) {
             for (final f in _parser.push(v)) {
               if (!_frameCtrl.isClosed) _frameCtrl.add(f);
             }
           });
           device.cancelWhenDisconnected(_notifySub!);
+          // 先监听再开启通知，避免丢掉订阅成功后立即发来的事件。
+          await c.setNotifyValue(true);
+          hasNotifications = true;
         }
         if (u == rxUuid) _rx = c;
+      }
+      if (!hasNotifications || _rx == null) {
+        throw Exception('手环缺少事件通知或控制特征，请检查固件');
       }
       _connSub?.cancel();
       _connSub = device.connectionState.listen((s) {
         if (s == BluetoothConnectionState.disconnected && wantConnected) {
+          _parser.reset();
           _setState(BandConnState.disconnected);
         }
       });
       _setState(BandConnState.connected);
     } catch (e) {
-      wantConnected = false;
-      _setState(BandConnState.disconnected);
+      await disconnect();
       rethrow;
     }
   }
@@ -132,6 +138,7 @@ class BleService {
     _notifySub = null;
     _connSub = null;
     _rx = null;
+    _parser.reset();
     final d = _device;
     _device = null;
     if (d != null) {

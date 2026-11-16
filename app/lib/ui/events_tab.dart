@@ -119,6 +119,11 @@ class _EventCard extends StatelessWidget {
                   : _hint(ev.status),
               style: const TextStyle(fontSize: 12, color: AppTheme.muted),
             ),
+            if (ev.isSos && state.sosSyncError(ev.id) != null)
+              Text(
+                '云端同步失败：${state.sosSyncError(ev.id)}',
+                style: const TextStyle(fontSize: 12, color: AppTheme.danger),
+              ),
             if (ev.isSos && state.sosNeedsSync(ev.id))
               TextButton(
                 onPressed: state.sosSyncing(ev.id)

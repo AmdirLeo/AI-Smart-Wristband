@@ -77,9 +77,12 @@ class AppState extends ChangeNotifier {
 
   final Set<String> _seenBandEvents = {};
   final Set<String> _unsyncedSos = {};
+  final Map<String, String> _sosSyncErrors = {};
   final Map<String, Future<void>> _sosSyncJobs = {};
   String? _lastSosId;
   bool _disposed = false;
+
+  String? sosSyncError(String id) => _sosSyncErrors[id];
 
   bool sosNeedsSync(String id) => _unsyncedSos.contains(id);
   bool sosSyncing(String id) => _sosSyncJobs.containsKey(id);
@@ -467,14 +470,8 @@ class AppState extends ChangeNotifier {
   /// BLE 收到 SOS 就向监护人告警；云端同步不阻塞本机告警。
   Future<void> sendSos() {
     if (_disposed) return Future.value();
-    final last = events.where((r) => r.event.id == _lastSosId).firstOrNull;
-    if (last != null &&
-        sosNeedsSync(last.event.id) &&
-        last.event.status != MsEventStatus.cancelled) {
-      activeEvent = last.event;
-      notifyListeners();
-      return retrySosSync(last.event.id);
-    }
+    // 每个新的 SOS 帧都是一次新的告警。旧事件的网络重试只通过
+    // retrySosSync(id) 触发，不能吞掉老人后续按下的 SOS。
     final now = DateTime.now().millisecondsSinceEpoch / 1000;
     final ev = MsEvent(
       id: _newRequestId(),
@@ -529,10 +526,14 @@ class AppState extends ChangeNotifier {
         if (activeEvent?.id == id) activeEvent = remote;
         _unsyncedSos.remove(id);
       }
-      lastError = null;
+      _sosSyncErrors.remove(id);
     } catch (e) {
       if (!_disposed) {
-        lastError = '本机已收到手表消息，云端同步未确认：$e。可在告警记录中重试同步。';
+        final detail = e is ApiException
+            ? 'HTTP ${e.statusCode}：${e.message}'
+            : '$e';
+        _sosSyncErrors[id] = detail;
+        lastError = '本机已收到手表消息，云端同步未确认：$detail。可在告警记录中重试同步。';
       }
     }
     if (!_disposed) notifyListeners();

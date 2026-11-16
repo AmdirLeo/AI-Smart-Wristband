@@ -112,17 +112,17 @@ class _HomeScreenState extends State<HomeScreen> {
     _fallDialogOpen = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-      await showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => FallConfirmDialog(event: ev),
-      );
-      if (state.activeEvent?.id == ev.id &&
-          state.activeEvent!.status.terminal) {
-        state.activeEvent = null;
+      try {
+        await showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => FallConfirmDialog(event: state.activeEvent ?? ev),
+        );
+      } finally {
+        // 关闭哪条事件由弹窗按钮处理；退场动画期间到达的新事件不能被清除。
+        _fallDialogOpen = false;
+        if (mounted) setState(() {});
       }
-      _fallDialogOpen = false;
-      if (mounted) setState(() {});
     });
   }
 }

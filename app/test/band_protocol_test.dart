@@ -39,6 +39,26 @@ void main() {
       expect(frames.first.arr('s')[3], 1.00);
     });
 
+    test('truncated raw followed by fragmented SOS recovers SOS', () {
+      final p = BandProtocolParser();
+      expect(p.push('{"t":"raw","s":[1.0,0,'.codeUnits), isEmpty);
+      expect(p.push('{"t":"ev","k":"s'.codeUnits), isEmpty);
+      final frames = p.push('os","q":42}\n'.codeUnits);
+      expect(frames.single.raw['k'], 'sos');
+      expect(frames.single.intOf('q'), 42);
+    });
+
+    test('reset drops a partial frame from a previous connection', () {
+      final p = BandProtocolParser();
+      p.push('{"t":"ev","k":"sos",'.codeUnits);
+      p.reset();
+      expect(p.push('"q":1}\n'.codeUnits), isEmpty);
+      expect(
+        p.push('{"t":"ev","k":"cancel","q":2}\n'.codeUnits).single.raw['k'],
+        'cancel',
+      );
+    });
+
     test('下行帧编码', () {
       expect(BandProtocolParser.frameMute(), '{"t":"mute"}\n'.codeUnits);
       expect(BandProtocolParser.frameAck(7), '{"t":"ok","q":7}\n'.codeUnits);
@@ -51,7 +71,8 @@ void main() {
         'label': 'suspected_fall',
         'score': 0.9805510706095325,
         'threshold': 0.2009596081649438,
-        'note': 'Uncalibrated whole-trial score; not a real-time alarm decision.',
+        'note':
+            'Uncalibrated whole-trial score; not a real-time alarm decision.',
         'mode': 'whole_trial_demo',
         'event': {
           'id': '3f54285b-e464-40f2-aaca-30e1bffb0416',
@@ -72,18 +93,27 @@ void main() {
       // 倒计时逻辑：deadline 为当前时间 +20 秒时应剩余约 20 秒
       final now = DateTime.now().millisecondsSinceEpoch / 1000;
       final fresh = MsEvent(
-          id: 'x', status: MsEventStatus.pending,
-          createdAt: now, deadline: now + 20);
+        id: 'x',
+        status: MsEventStatus.pending,
+        createdAt: now,
+        deadline: now + 20,
+      );
       expect(fresh.remainingSeconds, inInclusiveRange(19, 20));
     });
 
     test('非跌倒时 event 为 null，状态映射正确', () {
-      final r = PredictResult.fromJson(
-          {'label': 'non_fall', 'score': 0.01, 'threshold': 0.2, 'event': null});
+      final r = PredictResult.fromJson({
+        'label': 'non_fall',
+        'score': 0.01,
+        'threshold': 0.2,
+        'event': null,
+      });
       expect(r.isSuspectedFall, isFalse);
       expect(r.event, isNull);
-      expect(MsEventStatusX.from('simulated_notification'),
-          MsEventStatus.simulatedNotification);
+      expect(
+        MsEventStatusX.from('simulated_notification'),
+        MsEventStatus.simulatedNotification,
+      );
       expect(MsEventStatusX.from('help_requested').terminal, isTrue);
       expect(MsEventStatusX.from('pending').terminal, isFalse);
     });

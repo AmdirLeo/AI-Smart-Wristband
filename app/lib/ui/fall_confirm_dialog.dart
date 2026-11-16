@@ -54,6 +54,11 @@ class _FallConfirmDialogState extends State<FallConfirmDialog> {
 
     return PopScope(
       canPop: !pending, // 待确认期间不允许点外部/返回关闭
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop && identical(state.activeEvent, ev)) {
+          state.activeEvent = null;
+        }
+      },
       child: Dialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),

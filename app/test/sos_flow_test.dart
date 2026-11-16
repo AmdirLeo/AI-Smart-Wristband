@@ -4,6 +4,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:yian_app/ui/fall_confirm_dialog.dart';
+import 'package:yian_app/ui/home_screen.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:yian_app/ble/band_protocol.dart';
 import 'package:yian_app/ble/ble_service.dart';
 import 'package:yian_app/data/model_service_client.dart';
@@ -20,6 +23,8 @@ class FakeApi extends ModelServiceClient {
   bool failCancel = false;
   bool legacy = false;
   final stored = <String, MsEvent>{};
+  @override
+  Future<bool> ping() async => false;
   @override
   Future<MsEvent> createSos(String id) async {
     ids.add(id);
@@ -60,19 +65,41 @@ class FakeSpeech extends TtsService {
   Future<void> stop() async {}
 }
 
+class TestBand extends BleService {
+  final controller = StreamController<BandFrame>.broadcast(sync: true);
+  final parser = BandProtocolParser();
+  @override
+  Stream<BandFrame> get frames => controller.stream;
+  void receive(String chunk) {
+    for (final frame in parser.push(chunk.codeUnits)) {
+      controller.add(frame);
+    }
+  }
+
+  @override
+  void dispose() {
+    controller.close();
+    super.dispose();
+  }
+}
+
 BandFrame event(String kind, int seq) => BandFrame('ev', {'k': kind, 'q': seq});
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late FakeApi api;
   late FakeSpeech speech;
+  late TestBand band;
   late AppState state;
+  bool stateDisposed = false;
   setUp(() {
+    stateDisposed = false;
     api = FakeApi();
     speech = FakeSpeech();
-    state = AppState(client: api, band: BleService(), speech: speech);
+    band = TestBand();
+    state = AppState(client: api, band: band, speech: speech);
   });
-  tearDown(() => state.dispose());
+  tearDown(() { if (!stateDisposed) state.dispose(); });
 
   test(
     'SOS alarms immediately without waiting for cloud or prediction',
@@ -110,6 +137,8 @@ void main() {
     final id = state.activeEvent!.id;
     expect(state.activeEvent!.status, MsEventStatus.helpRequested);
     expect(state.lastError, contains('云端同步未确认'));
+    state.clearMessages();
+    expect(state.sosSyncError(id), contains('response lost'));
     api.fail = false;
     await state.retrySosSync(id);
     expect(api.ids, [id, id]);
@@ -144,6 +173,20 @@ void main() {
       expect(state.sosNeedsSync(id), isFalse);
     },
   );
+
+  test('new SOS after a failed sync creates a new local alarm', () async {
+    api.fail = true;
+    await state.sendSos();
+    final first = state.activeEvent!.id;
+    api.fail = false;
+    await state.handleBandEvent(event('sos', 2));
+    expect(state.activeEvent!.id, isNot(first));
+    expect(state.activeEvent!.status, MsEventStatus.helpRequested);
+    expect(state.events, hasLength(2));
+    expect(api.ids, [first, state.activeEvent!.id]);
+    expect(speech.spoken, hasLength(2));
+    expect(state.sosNeedsSync(first), isTrue);
+  });
 
   test('new SOS after cancellation creates a new alarm', () async {
     await state.sendSos();
@@ -181,6 +224,74 @@ void main() {
       await tester.pump();
       expect(find.text('老人已取消 SOS'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'BLE bytes reach HomeScreen; network failure never blocks repeat alerts',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      PackageInfo.setMockInitialValues(
+        appName: 'test',
+        packageName: 'test',
+        version: '0.2.4',
+        buildNumber: '6',
+        buildSignature: '',
+      );
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await state.init();
+      api.fail = true;
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: state,
+          child: const MaterialApp(home: HomeScreen()),
+        ),
+      );
+      await tester.pump();
+      // 模拟上一条 raw 发送中断，下一条 SOS 被拆成两个 BLE 包。
+      band.receive('{"t":"raw","s":[0,');
+      band.receive('{"t":"ev","k":"sos",');
+      band.receive('"q":1}\n');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('老人紧急求助'), findsOneWidget);
+      expect(find.textContaining('response lost'), findsWidgets);
+      final first = state.activeEvent!.id;
+      expect(speech.spoken, hasLength(1));
+      await tester.tap(find.text('我已知晓'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('老人紧急求助'), findsNothing);
+      band.receive('{"t":"ev","k":"sos","q":2}\n');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('老人紧急求助'), findsOneWidget);
+      expect(state.activeEvent!.id, isNot(first));
+      expect(speech.spoken, hasLength(2));
+      expect(state.events, hasLength(2));
+      // 同一帧重传不重复报警；新帧不受旧云端失败影响。
+      band.receive('{"t":"ev","k":"sos","q":2}\n');
+      await tester.pump();
+      expect(state.events, hasLength(2));
+      // 旧弹窗退场过程中再收到 SOS，新事件必须仍能显示。
+      await tester.tap(find.text('我已知晓'));
+      band.receive('{"t":"ev","k":"sos","q":3}\n');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('老人紧急求助'), findsOneWidget);
+      expect(state.events, hasLength(3));
+      expect(speech.spoken, hasLength(3));
+      band.receive('{"t":"ev","k":"cancel","q":4}\n');
+      await tester.pump();
+      expect(find.text('老人已取消 SOS'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      state.dispose();
+      stateDisposed = true;
     },
   );
 

@@ -24,7 +24,7 @@ class _SettingsTabState extends State<SettingsTab> {
   void initState() {
     super.initState();
     PackageInfo.fromPlatform().then((v) {
-      if (mounted) setState(() => _version = v.version);
+      if (mounted) setState(() => _version = '${v.version}+${v.buildNumber}');
     });
   }
 

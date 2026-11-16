@@ -21,6 +21,9 @@ class BandProtocolParser {
   final List<int> _buf = [];
   static const int maxBuf = 4096;
 
+  /// 断开/重连后丢弃上一连接的半帧。
+  void reset() => _buf.clear();
+
   /// 喂入收到的原始字节，返回完整解析出的帧列表。
   List<BandFrame> push(List<int> bytes) {
     final frames = <BandFrame>[];
@@ -46,7 +49,10 @@ class BandProtocolParser {
         return BandFrame(j['t'] as String, j);
       }
     } on FormatException {
-      // 半截/脏数据直接丢弃
+      // 固件发送超时会留下半帧（没有换行），下一条完整帧可能紧接其后。
+      // 仅在整行解析失败时，尝试恢复本协议以 {"t": 开头的完整尾帧。
+      final start = s.lastIndexOf('{"t":');
+      if (start > 0) return _decode(s.substring(start));
     }
     return null;
   }
