@@ -1,4 +1,5 @@
 """Single-process demonstration service; no real emergency messages are sent."""
+import asyncio
 from contextlib import asynccontextmanager
 from copy import deepcopy
 import csv
@@ -50,12 +51,19 @@ class Confirmation(BaseModel):
 
 
 async def limited_body(request: Request) -> bytes:
+    # 注意：读取必须与 request.stream() 消费在同一个任务内完成，
+    # asyncio.wait_for 会把流读取包进新任务导致请求体变空（实测 422）。
+    # Python 3.11+ 的 asyncio.timeout 取消的是当前任务，没有跨任务问题。
     chunks, size = [], 0
-    async for chunk in request.stream():
-        size += len(chunk)
-        if size > MAX_BODY:
-            raise HTTPException(413, "上传内容超过 2 MB，请使用一段 10–20 秒记录。")
-        chunks.append(chunk)
+    try:
+        async with asyncio.timeout(10):
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > MAX_BODY:
+                    raise HTTPException(413, "上传内容超过 2 MB，请使用一段 10–20 秒记录。")
+                chunks.append(chunk)
+    except TimeoutError:
+        raise HTTPException(408, "读取请求超时，请重试。") from None
     return b"".join(chunks)
 
 
