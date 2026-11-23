@@ -18,6 +18,7 @@ build/
 dist/
 
 # Local configuration and credentials
+guardians.json
 .env
 .env.*
 !.env.example

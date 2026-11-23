@@ -99,7 +99,7 @@ class AppState extends ChangeNotifier {
       }
     }
     // SOS 与取消立即更新监护人界面，不排在推理或 HTTP 请求后面。
-    if (kind == 'sos') return sendSos();
+    if (kind == 'sos') return sendSos(source: 'band');
     if (kind == 'cancel') return _cancelFromBand();
     return runPredict();
   }
@@ -468,7 +468,8 @@ class AppState extends ChangeNotifier {
   }
 
   /// BLE 收到 SOS 就向监护人告警；云端同步不阻塞本机告警。
-  Future<void> sendSos() {
+  /// source='wearer'（本机短按触发）时同步让手环震动+蜂鸣；'band'（手环按键）则手环已在告警。
+  Future<void> sendSos({String source = 'wearer'}) {
     if (_disposed) return Future.value();
     // 每个新的 SOS 帧都是一次新的告警。旧事件的网络重试只通过
     // retrySosSync(id) 触发，不能吞掉老人后续按下的 SOS。
@@ -490,6 +491,9 @@ class AppState extends ChangeNotifier {
     lastInfo = '收到老人 SOS，请立即查看并联系老人';
     notifyListeners();
     unawaited(tts.speak('紧急求助！老人按下了 SOS，请立即查看并联系老人。'));
+    if (source != 'band') {
+      unawaited(ble.send(BandProtocolParser.frameSosOn())); // 手环同步震动+蜂鸣
+    }
     unawaited(HapticFeedback.heavyImpact().catchError((Object _) {}));
     return retrySosSync(ev.id);
   }
@@ -537,6 +541,35 @@ class AppState extends ChangeNotifier {
       }
     }
     if (!_disposed) notifyListeners();
+  }
+
+  /// 最近一次 SOS 是否仍在告警中（未被取消）
+  bool get sosAlerting {
+    final rec = events.where((r) => r.event.id == _lastSosId).firstOrNull;
+    return rec != null && rec.event.status == MsEventStatus.helpRequested;
+  }
+
+  /// 佩戴者长按取消：本地标记已取消 → 服务端 cancelSos → 手环停止告警
+  Future<void> cancelSosByWearer() async {
+    if (_disposed) return;
+    final rec = events.where((r) => r.event.id == _lastSosId).firstOrNull;
+    if (rec == null || rec.event.status != MsEventStatus.helpRequested) return;
+    rec.event = rec.event.copyWith(
+      status: MsEventStatus.cancelled,
+      reason: 'wearer_cancelled',
+    );
+    if (activeEvent?.id == rec.event.id) activeEvent = null;
+    _unsyncedSos.add(rec.event.id);
+    lastInfo = 'SOS 已取消';
+    notifyListeners();
+    unawaited(tts.stop());
+    unawaited(ble.send(BandProtocolParser.frameSosOff())); // 不等待云端就停止手环提示
+    // 旧请求可能已决定失败/成功但尚未清理 job；等待后补交取消。
+    final pending = _sosSyncJobs[rec.event.id];
+    if (pending != null) await pending;
+    if (!_disposed && _unsyncedSos.contains(rec.event.id)) {
+      await retrySosSync(rec.event.id);
+    }
   }
 
   // ———————————————— 内部工具 ————————————————

@@ -9,7 +9,7 @@ import '../models/models.dart';
 import '../state/app_state.dart';
 import 'widgets/common.dart';
 
-/// 实时页：手环连接、实时状态、六轴窗口、跌倒识别入口、长按 SOS。
+/// 实时页：手环连接、实时状态、六轴窗口、跌倒识别入口、短按 SOS 与长按取消。
 class LiveTab extends StatelessWidget {
   const LiveTab({super.key});
 
@@ -27,7 +27,7 @@ class LiveTab extends StatelessWidget {
         const SizedBox(height: 12),
         const _PredictCard(),
         const SizedBox(height: 12),
-        if (state.demoMode) const _SosButton(),
+        const _SosButton(),
         const SizedBox(height: 30),
       ],
     );
@@ -423,7 +423,7 @@ class _PredictCard extends StatelessWidget {
   }
 }
 
-/// 监护人联调用的 SOS 模拟入口；日常求助来自老人手表
+/// 主页 SOS：短按触发求助；触发后变为告警中，长按 1.5 秒取消（佩戴者取消）。
 class _SosButton extends StatefulWidget {
   const _SosButton();
 
@@ -436,26 +436,24 @@ class _SosButtonState extends State<_SosButton> {
   Timer? _timer;
   double _progress = 0;
 
-  void _start() {
+  void _holdStart() {
     _timer?.cancel();
-    setState(() => _progress = 0.02);
-    final begin = DateTime.now();
+    if (mounted) setState(() => _progress = 0.02);
     _timer = Timer.periodic(const Duration(milliseconds: 50), (t) {
-      final p =
-          DateTime.now().difference(begin).inMilliseconds /
-          _hold.inMilliseconds;
+      final p = t.tick * 50 / _hold.inMilliseconds;
       if (p >= 1) {
         t.cancel();
         _timer = null;
+        if (!mounted) return;
         setState(() => _progress = 0);
-        context.read<AppState>().sendSos();
+        context.read<AppState>().cancelSosByWearer();
       } else {
-        setState(() => _progress = p);
+        if (mounted) setState(() => _progress = p);
       }
     });
   }
 
-  void _cancel() {
+  void _holdCancel() {
     _timer?.cancel();
     _timer = null;
     if (mounted) setState(() => _progress = 0);
@@ -469,10 +467,17 @@ class _SosButtonState extends State<_SosButton> {
 
   @override
   Widget build(BuildContext context) {
+    final alerting = context.watch<AppState>().sosAlerting;
     return GestureDetector(
-      onLongPressStart: (_) => _start(),
-      onLongPressEnd: (_) => _cancel(),
-      onLongPressCancel: _cancel,
+      onTap: alerting
+          ? null
+          : () {
+              context.read<AppState>().sendSos();
+            },
+      // 从触屏时开始计时，避免再叠加框架约 0.5 秒的长按识别时间。
+      onLongPressDown: alerting ? (_) => _holdStart() : null,
+      onLongPressEnd: alerting ? (_) => _holdCancel() : null,
+      onLongPressCancel: alerting ? _holdCancel : null,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(20),
         child: Stack(
@@ -480,19 +485,23 @@ class _SosButtonState extends State<_SosButton> {
           children: [
             Container(
               height: 88,
-              color: AppTheme.danger,
+              color: alerting ? AppTheme.warn : AppTheme.danger,
               alignment: Alignment.center,
-              child: const Column(
+              child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.emergency, color: Colors.white, size: 30),
-                      SizedBox(width: 10),
+                      Icon(
+                        alerting ? Icons.notifications_active : Icons.emergency,
+                        color: Colors.white,
+                        size: 30,
+                      ),
+                      const SizedBox(width: 10),
                       Text(
-                        '长按模拟 SOS',
-                        style: TextStyle(
+                        alerting ? 'SOS 告警中' : 'SOS 求助',
+                        style: const TextStyle(
                           color: Colors.white,
                           fontSize: 21,
                           fontWeight: FontWeight.w800,
@@ -501,10 +510,10 @@ class _SosButtonState extends State<_SosButton> {
                       ),
                     ],
                   ),
-                  SizedBox(height: 4),
+                  const SizedBox(height: 4),
                   Text(
-                    '测试监护人告警，立即触发',
-                    style: TextStyle(color: Colors.white70, fontSize: 11),
+                    alerting ? '长按 1.5 秒取消求助' : '短按触发；触发后长按可取消',
+                    style: const TextStyle(color: Colors.white70, fontSize: 11),
                   ),
                 ],
               ),

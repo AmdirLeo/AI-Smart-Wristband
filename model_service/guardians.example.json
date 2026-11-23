@@ -1,0 +1,9 @@
+{
+  "wearer_name": "示例：王奶奶",
+  "webhooks": [
+    {
+      "name": "监护人微信群",
+      "url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=把这里换成你建群机器人的key"
+    }
+  ]
+}

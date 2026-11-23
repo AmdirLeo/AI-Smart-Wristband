@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:yian_app/ui/fall_confirm_dialog.dart';
 import 'package:yian_app/ui/home_screen.dart';
+import 'package:yian_app/ui/live_tab.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:yian_app/ble/band_protocol.dart';
@@ -68,6 +69,12 @@ class FakeSpeech extends TtsService {
 class TestBand extends BleService {
   final controller = StreamController<BandFrame>.broadcast(sync: true);
   final parser = BandProtocolParser();
+  final sent = <String>[];
+  @override
+  Future<void> send(List<int> bytes) async {
+    sent.add(String.fromCharCodes(bytes));
+  }
+
   @override
   Stream<BandFrame> get frames => controller.stream;
   void receive(String chunk) {
@@ -99,7 +106,9 @@ void main() {
     band = TestBand();
     state = AppState(client: api, band: band, speech: speech);
   });
-  tearDown(() { if (!stateDisposed) state.dispose(); });
+  tearDown(() {
+    if (!stateDisposed) state.dispose();
+  });
 
   test(
     'SOS alarms immediately without waiting for cloud or prediction',
@@ -294,6 +303,80 @@ void main() {
       stateDisposed = true;
     },
   );
+
+  testWidgets('home SOS taps to start and holds 1.5 seconds to cancel', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: state,
+        child: const MaterialApp(home: Scaffold(body: LiveTab())),
+      ),
+    );
+    await tester.scrollUntilVisible(find.text('SOS 求助'), 300);
+    await tester.tap(find.text('SOS 求助'));
+    await tester.pumpAndSettle();
+    expect(state.sosAlerting, isTrue);
+    expect(find.text('SOS 告警中'), findsOneWidget);
+    var gesture = await tester.startGesture(
+      tester.getCenter(find.text('SOS 告警中')),
+    );
+    await tester.pump(const Duration(milliseconds: 800));
+    await gesture.up();
+    await tester.pump(const Duration(milliseconds: 800));
+    expect(state.sosAlerting, isTrue); // early release must not cancel later
+    gesture = await tester.startGesture(tester.getCenter(find.text('SOS 告警中')));
+    await tester.pump(const Duration(milliseconds: 1490));
+    expect(state.sosAlerting, isTrue);
+    await tester.pump(const Duration(milliseconds: 60));
+    expect(state.sosAlerting, isFalse);
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(find.text('SOS 求助'), findsOneWidget);
+    expect(band.sent.last, '{"t":"sos-off"}\n');
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  test(
+    'phone cancellation sends stop immediately while create is pending',
+    () async {
+      api.gate = Completer<void>();
+      final sending = state.sendSos();
+      final id = state.activeEvent!.id;
+      final cancelling = state.cancelSosByWearer();
+      expect(state.sosAlerting, isFalse);
+      expect(state.activeEvent, isNull);
+      expect(state.sosNeedsSync(id), isTrue);
+      expect(band.sent, ['{"t":"sos-on"}\n', '{"t":"sos-off"}\n']);
+      api.gate!.complete();
+      await Future.wait([sending, cancelling]);
+      expect(api.stored[id]!.status, MsEventStatus.cancelled);
+      expect(state.sosNeedsSync(id), isFalse);
+    },
+  );
+
+  test(
+    'phone cancellation failure stays retryable after a successful create',
+    () async {
+      await state.sendSos();
+      final id = state.activeEvent!.id;
+      api.failCancel = true;
+      await state.cancelSosByWearer();
+      expect(state.sosAlerting, isFalse);
+      expect(state.sosNeedsSync(id), isTrue);
+      expect(state.sosSyncError(id), contains('cancel response lost'));
+      api.failCancel = false;
+      await state.retrySosSync(id);
+      expect(api.stored[id]!.status, MsEventStatus.cancelled);
+      expect(state.sosNeedsSync(id), isFalse);
+    },
+  );
+
+  test('band SOS does not echo a second start command to the band', () async {
+    await state.handleBandEvent(event('sos', 99));
+    expect(band.sent, isEmpty);
+    expect(state.sosAlerting, isTrue);
+  });
 
   test('cancel without an alarm does not fabricate a record', () async {
     await state.handleBandEvent(event('cancel', 3));

@@ -9,7 +9,7 @@
  *        —— App 缓冲 10–20 秒窗口后调用 model_service /api/predict 做跌倒识别
  *      - st 帧 0.5Hz：合加速度/姿态/静止/电量/屏幕诊断（实时页展示）
  *   2. 端侧跌倒初筛（冲击 + 持续静止 → ev{fall}，保留本地提示）
- *   3. SOS / 取消按键
+ *   3. D6 短按松开（<1s）SOS；D6 长按（≥1.5s）或 D7 取消
  *
  * 依赖（arduino-cli）：
  *   arduino-cli core install Seeeduino:nrf52
@@ -35,10 +35,11 @@
 #include <Wire.h>
 #include <LSM6DS3.h>
 #include <math.h>
-#include "ButtonInput.h"
+#include "SosControls.h"
+#include "BandCommands.h"
 #include "LocalFeedback.h"
 
-#define FIRMWARE_VERSION "io-20261116-2"
+#define FIRMWARE_VERSION "io-20261123-1"
 
 #define DEVICE_NAME   "YianBand"   // 可改为 YianBand-01 等区分不同老人
 #define PIN_BTN_SOS   D6
@@ -77,9 +78,11 @@ uint16_t seq = 0;
 int      batteryPct = 90;
 bool     countdownActive = false;
 uint32_t countdownEndMs = 0;
-ButtonInput sosButton, cancelButton;
+SosControls buttons;
+BandCommands commands;
+bool sosAlerting = false;
 uint32_t sosNoticeUntil = 0;
-volatile bool muteRequested = false;
+
 
 // 分片发送：BLEUart 内部 FIFO 一次只接受约 MTU-3 字节（默认 MTU=23 时仅 20），
 // 超长帧的剩余部分会被直接丢弃 → 必须分片 + 背压重试。
@@ -127,16 +130,48 @@ void sendRaw(uint32_t now, float ax, float ay, float az,
   sendFrame(buf);
 }
 
-// 手机 → 手环（静音提示）：回调通知后主动读取缓冲
-void rxCallback(uint16_t conn_hdl) {
-  char buf[64];
-  int n = 0;
-  while (bleuart.available() && n < (int)sizeof(buf) - 1) {
-    buf[n++] = (char)bleuart.read();
+// 下行指令与本地按键都由主循环处理，避免 BLE 回调与 I2S/PWM 竞争。
+void startSosAlert() {
+  sosAlerting = true;
+  countdownActive = false;
+  inImpact = false;
+  LocalFeedback::start(true, true, 1200);
+}
+
+void cancelAlert(bool notifyApp) {
+  LocalFeedback::stop();
+  sosAlerting = false;
+  countdownActive = false;
+  inImpact = false;
+  gPeak = 0;
+  stillSinceMs = 0;
+  sosNoticeUntil = 0;
+  if (notifyApp && Bluefruit.connected()) sendEvent("cancel", 0, 0, 1.0f);
+}
+
+void commandTask() {
+  while (bleuart.available()) {
+    switch (commands.push((char)bleuart.read())) {
+      case BandCommand::sosOn: startSosAlert(); break;
+      case BandCommand::sosOff: cancelAlert(false); break;
+      case BandCommand::mute:
+        LocalFeedback::stop();
+        countdownActive = false;
+        inImpact = false;
+        break;
+      default: break;
+    }
   }
-  buf[n] = 0;
-  if (n > 0 && strstr(buf, "\"mute\"") != nullptr) {
-    muteRequested = true; // BLE 回调只发请求，外设统一由 loop 控制。
+}
+
+void buttonTask(uint32_t now, bool connected) {
+  const SosAction action = buttons.update(digitalRead(PIN_BTN_SOS) == LOW,
+                                         digitalRead(PIN_BTN_CANCEL) == LOW, now);
+  if (action == SosAction::cancel) cancelAlert(true);
+  else if (action == SosAction::trigger && connected) {
+    startSosAlert();
+    sendEvent("sos", 0, 0, 1.0f);
+    sosNoticeUntil = now + 3000;
   }
 }
 
@@ -187,7 +222,9 @@ void drawScreen() {
     u8g2->drawUTF8(0, 29, "蓝牙:未连接");
     u8g2->drawUTF8(0, 43, "等待手机连接...");
   }
-  if ((int32_t)(sosNoticeUntil - millis()) > 0) {
+  if (sosAlerting) {
+    u8g2->drawUTF8(0, 60, "SOS告警中 长按取消");
+  } else if ((int32_t)(sosNoticeUntil - millis()) > 0) {
     u8g2->drawUTF8(0, 60, "SOS已触发");
   } else if (countdownActive) {
     int left = (int32_t)(countdownEndMs - millis()) / 1000 + 1;
@@ -251,13 +288,6 @@ void serialDiagnostics() {
 
 // 单字符 USB 模块测试，不制造 SOS 事件或改变云端记录。
 void feedbackTask() {
-  if (muteRequested) {
-    muteRequested = false;
-    countdownActive = false;
-    inImpact = false;
-    LocalFeedback::stop();
-    digitalWrite(PIN_LED_STAT, LOW);
-  }
   if (Serial) {
     while (Serial.available()) {
       switch (Serial.read()) {
@@ -270,6 +300,8 @@ void feedbackTask() {
     }
   }
   LocalFeedback::tick();
+  // XIAO 板载 LED 为低电平点亮，和本地提示同步。
+  digitalWrite(PIN_LED_STAT, LocalFeedback::active && LocalFeedback::outputOn ? LOW : HIGH);
 }
 
 void setup() {
@@ -278,6 +310,7 @@ void setup() {
   pinMode(PIN_BTN_CANCEL, INPUT_PULLUP);
   LocalFeedback::begin();
   pinMode(PIN_LED_STAT, OUTPUT);
+  digitalWrite(PIN_LED_STAT, HIGH);
   pinMode(VBAT_ENABLE, OUTPUT);
   digitalWrite(VBAT_ENABLE, HIGH);
   analogReadResolution(12);
@@ -291,7 +324,7 @@ void setup() {
   Bluefruit.setName(DEVICE_NAME);
 
   bleuart.begin();
-  bleuart.setRxCallback(rxCallback);
+  // 主循环轮询 UART，保留分片帧直到换行。
 
   Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
   // 注意：不加 addTxPower()，31 字节广播包才放得下完整名字（避免截断成 YianB）
@@ -303,103 +336,76 @@ void setup() {
 }
 
 void loop() {
-  feedbackTask();
-  serialDiagnostics();
-  screenTask();                 // 屏幕 500ms 节流刷新（连接与否都刷）
-  if (!Bluefruit.connected()) {
-    if (cancelButton.update(digitalRead(PIN_BTN_CANCEL) == LOW, millis(), 0)) {
-      LocalFeedback::stop();
-    }
-    delay(5);
-    return;
-  }
-
-  sosButton = ButtonInput{};
-  cancelButton = ButtonInput{};
-  bootMs = millis();
-  lastRawMs = bootMs;
-  lastStateMs = bootMs;
-
-  while (Bluefruit.connected()) {
-    feedbackTask();
-    serialDiagnostics();
-    uint32_t now = millis();
-
-    screenTask();                 // 连接期间也持续刷新屏幕（内部 500ms 节流）
-
-    // 取消优先；连接期间轮询，事件不依赖本地倒计时。
-    bool sos = sosButton.update(digitalRead(PIN_BTN_SOS) == LOW, now, 1500);
-    bool cancel = cancelButton.update(digitalRead(PIN_BTN_CANCEL) == LOW, now, 0);
-    if (cancel) {
-      LocalFeedback::stop();
-      sendEvent("cancel", 0, 0, 1.0f);
+  static bool wasConnected = false;
+  const bool connected = Bluefruit.connected();
+  const uint32_t now = millis();
+  if (connected != wasConnected) {
+    wasConnected = connected;
+    commands.reset();
+    buttons.suppressTap = true;
+    if (connected) {
+      bootMs = lastRawMs = lastStateMs = now;
+    } else {
       countdownActive = false;
       inImpact = false;
-      gPeak = 0;
-      stillSinceMs = 0;
-      sosNoticeUntil = 0;
-      digitalWrite(PIN_LED_STAT, LOW);
-    } else if (sos && !cancelButton.down) {
-      LocalFeedback::start(true, true, 1200);
-      sendEvent("sos", 0, 0, 1.0f);
-      sosNoticeUntil = now + 3000;
-    }
-
-    // —— 20Hz 六轴采集 + raw 帧（模型识别输入） ——
-    if (now - lastRawMs >= RAW_PERIOD_MS) {
-      lastRawMs = now;
-      float ax = imu.readFloatAccelX();
-      float ay = imu.readFloatAccelY();
-      float az = imu.readFloatAccelZ();
-      float gx = imu.readFloatGyroX();
-      float gy = imu.readFloatGyroY();
-      float gz = imu.readFloatGyroZ();
-      sendRaw(now, ax, ay, az, gx, gy, gz);
-
-      // —— 端侧初筛：冲击 → 持续静止 ——
-      float g = readG(ax, ay, az);
-      gNow = g;
-      bool still = fabsf(g - 1.0f) < STILL_DEV;
-      if (!inImpact && g > IMPACT_G) { inImpact = true; gPeak = g; impactMs = now; }
-      else if (inImpact && g > gPeak) gPeak = g;
-      if (inImpact && still) {
-        if (stillSinceMs == 0) stillSinceMs = now;
-        if (now - impactMs > STILL_MS && !countdownActive) {
-          float stillSec = (now - stillSinceMs) / 1000.0f;
-          sendEvent("fall", gPeak, stillSec, 0.85f);   // 事件帧仍发，App 记录端侧初筛
-          countdownActive = true;
-          countdownEndMs = now + COUNTDOWN_S * 1000;
-          LocalFeedback::start(true, true, COUNTDOWN_S * 1000);
-          digitalWrite(PIN_LED_STAT, HIGH);
-        }
-      } else {
-        stillSinceMs = 0;
-      }
-      if (inImpact && now - impactMs > 30000) { inImpact = false; gPeak = 0; }
-
-      if (countdownActive && (int32_t)(now - countdownEndMs) >= 0) {
-        countdownActive = false;
-        LocalFeedback::stop();
-        digitalWrite(PIN_LED_STAT, LOW);
-      }
-    }
-
-    // —— 0.5Hz 状态帧（实时页展示 + 电量） ——
-    if (now - lastStateMs >= STATE_PERIOD_MS) {
-      lastStateMs = now;
-      batteryPct = readBattery();
-      float ax = imu.readFloatAccelX();
-      float ay = imu.readFloatAccelY();
-      float az = imu.readFloatAccelZ();
-      float g = readG(ax, ay, az);
-      float pitch = atan2f(-ax, sqrtf(ay * ay + az * az)) * 57.2958f;
-      float roll  = atan2f(ay, az) * 57.2958f;
-      sendState(g, pitch, roll, fabsf(g - 1.0f) < STILL_DEV);
+      LocalFeedback::stop();
     }
   }
-  countdownActive = false;
-  inImpact = false;
-  LocalFeedback::stop();
-  digitalWrite(PIN_LED_STAT, LOW);
-  // 断连后 Advertising.restartOnDisconnect(true) 自动恢复广播，App 负责重连
+  if (connected) commandTask();
+  else while (bleuart.available()) bleuart.read();
+  buttonTask(now, connected); // 断连时仍可取消已有提示；离线短按不补发。
+  feedbackTask();
+  serialDiagnostics();
+  screenTask();
+  if (!connected) { delay(5); return; }
+
+  // —— 20Hz 六轴采集 + raw 帧（模型识别输入） ——
+  if (now - lastRawMs >= RAW_PERIOD_MS) {
+    lastRawMs = now;
+    float ax = imu.readFloatAccelX();
+    float ay = imu.readFloatAccelY();
+    float az = imu.readFloatAccelZ();
+    float gx = imu.readFloatGyroX();
+    float gy = imu.readFloatGyroY();
+    float gz = imu.readFloatGyroZ();
+    sendRaw(now, ax, ay, az, gx, gy, gz);
+
+    // —— 端侧初筛：冲击 → 持续静止 ——
+    float g = readG(ax, ay, az);
+    gNow = g;
+    bool still = fabsf(g - 1.0f) < STILL_DEV;
+    if (!sosAlerting && !inImpact && g > IMPACT_G) { inImpact = true; gPeak = g; impactMs = now; }
+    else if (inImpact && g > gPeak) gPeak = g;
+    if (inImpact && still) {
+      if (stillSinceMs == 0) stillSinceMs = now;
+      if (now - impactMs > STILL_MS && !countdownActive) {
+        float stillSec = (now - stillSinceMs) / 1000.0f;
+        sendEvent("fall", gPeak, stillSec, 0.85f);   // 事件帧仍发，App 记录端侧初筛
+        countdownActive = true;
+        countdownEndMs = now + COUNTDOWN_S * 1000;
+        LocalFeedback::start(true, true, COUNTDOWN_S * 1000);
+      }
+    } else {
+      stillSinceMs = 0;
+    }
+    if (inImpact && now - impactMs > 30000) { inImpact = false; gPeak = 0; }
+
+    if (countdownActive && (int32_t)(now - countdownEndMs) >= 0) {
+      countdownActive = false;
+      LocalFeedback::stop();
+    }
+  }
+
+  // —— 0.5Hz 状态帧（实时页展示 + 电量） ——
+  if (now - lastStateMs >= STATE_PERIOD_MS) {
+    lastStateMs = now;
+    batteryPct = readBattery();
+    float ax = imu.readFloatAccelX();
+    float ay = imu.readFloatAccelY();
+    float az = imu.readFloatAccelZ();
+    float g = readG(ax, ay, az);
+    float pitch = atan2f(-ax, sqrtf(ay * ay + az * az)) * 57.2958f;
+    float roll  = atan2f(ay, az) * 57.2958f;
+    sendState(g, pitch, roll, fabsf(g - 1.0f) < STILL_DEV);
+  }
 }
