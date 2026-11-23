@@ -100,3 +100,55 @@ def test_no_config_is_silent(tmp_path, monkeypatch):
         r = client.post("/api/events/sos",
                         json={"request_id": "550e8400-e29b-41d4-a716-446655440000"})
         assert r.status_code == 200  # 未配置告警不影响接口本身
+
+
+def test_multi_channel_payload_shapes(tmp_path, monkeypatch):
+    """钉钉与 PushPlus 渠道分别收到各自格式的 payload。"""
+    received = []
+
+    class H(BaseHTTPRequestHandler):
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(n).decode("utf-8"))
+            received.append((self.path, body))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"code":0}')
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), H)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_port}"
+    cfg = tmp_path / "guardians.json"
+    cfg.write_text(json.dumps({
+        "wearer_name": "测试奶奶",
+        "webhooks": [
+            {"type": "dingtalk", "name": "钉钉", "url": url + "/dingtalk"},
+            {"type": "pushplus", "name": "pushplus", "token": "tok123", "url": url + "/pushplus"},
+        ]
+    }, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setenv("WECOM_GUARDIANS_FILE", str(cfg))
+
+    from app import create_app
+    from fastapi.testclient import TestClient
+    with TestClient(create_app(access_token="test-secret")) as client:
+        client.headers["Authorization"] = "Bearer test-secret"
+        uuid = "550e8400-e29b-41d4-a716-446655440000"
+        r = client.post("/api/events/sos", json={"request_id": uuid})
+        assert r.status_code == 200
+        deadline = time.time() + 3
+        while time.time() < deadline and len(received) < 2:
+            time.sleep(0.05)
+
+    server.shutdown()
+    server.server_close()
+    assert len(received) == 2
+    paths = {p for p, _ in received}
+    assert paths == {"/dingtalk", "/pushplus"}
+    ding = next(b for p, b in received if p == "/dingtalk")
+    pp = next(b for p, b in received if p == "/pushplus")
+    assert ding["msgtype"] == "markdown" and "SOS" in ding["markdown"]["text"]
+    assert pp["token"] == "tok123" and "SOS" in pp["title"]

@@ -169,19 +169,33 @@ SOS 创建后为 pending，使用同一 20 秒 deadline：
 App、固件和服务端必须一起更新；旧服务端无此路由，将返回 404，App 会显示提交未确认。
 App 需在前台运行并连接手环和服务端。离线不会假装提交成功；恢复网络后再次长按会用同一请求标识重试。
 
-## 8. 企业微信告警（可选配置）
+## 8. 告警推送到监护人（可选配置）
 
-SOS 创建、SOS 取消、疑似跌倒告警三类事件发生时，服务端会向配置的企业微信群
-推送一条 markdown 消息（群里拉入普通个人微信用户即可接收，无需安装企业微信）。
+SOS 创建、SOS 取消、疑似跌倒告警三类事件发生时，服务端会向 `guardians.json`
+里配置的全部渠道各推一条消息。**不是必须企业微信**——支持四种渠道，
+监护人按自己的习惯选一个（或多人多渠道混用，一人一条配置）：
 
-配置 `model_service/guardians.json`（已加入 .gitignore，勿提交真实 key）：
+| type | 渠道 | 获取方式 | 消息到达 |
+|---|---|---|---|
+| `wecom` | 企业微信内部群 | 群设置 → 群机器人 → 复制 Webhook | 企业微信 App |
+| `dingtalk` | 钉钉群 | 群设置 → 智能群助手 → 添加自定义机器人（安全设置选"自定义关键词"，填"告警"） | 钉钉 App |
+| `pushplus` | **微信** | pushplus.plus 微信扫码登录 → 复制 token | **微信服务号** |
+| `serverchan` | **微信** | sct.ftqq.com 微信扫码登录 → 复制 SendKey | **微信服务号** |
+
+配置 `model_service/guardians.json`（已加入 .gitignore，勿提交真实 token）：
 
 ```json
 {
   "wearer_name": "王奶奶",
-  "webhooks": [{ "name": "监护人微信群", "url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=你的key" }]
+  "webhooks": [
+    { "type": "wecom",    "name": "企业微信群", "url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx" },
+    { "type": "dingtalk", "name": "钉钉群",     "url": "https://oapi.dingtalk.com/robot/send?access_token=xxx" },
+    { "type": "pushplus", "name": "微信",       "token": "xxx" },
+    { "type": "serverchan", "name": "微信",     "token": "xxx" }
+  ]
 }
 ```
 
-获取 webhook：企业微信群 → 右键 → 添加群机器人 → 复制 Webhook 地址。
-未配置该文件时接口行为完全不变；发送失败只记日志，不影响事件流程。
+- 每个 SOS / 取消 / 疑似跌倒事件会向列表里**所有渠道**各推一条（= 所有监护人都收到）。
+- 单个渠道失败只记日志，不影响其他渠道与接口本身。
+- 该文件已在 .gitignore 中忽略；`guardians.example.json` 为模板。

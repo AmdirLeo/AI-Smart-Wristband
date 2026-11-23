@@ -1,9 +1,9 @@
 {
   "wearer_name": "示例：王奶奶",
   "webhooks": [
-    {
-      "name": "监护人微信群",
-      "url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=把这里换成你建群机器人的key"
-    }
+    { "type": "wecom",      "name": "企业微信内部群", "url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=替换成你的key" },
+    { "type": "dingtalk",   "name": "钉钉群",         "url": "https://oapi.dingtalk.com/robot/send?access_token=替换成你的token" },
+    { "type": "pushplus",   "name": "微信PushPlus",   "token": "pushplus.plus 微信扫码登录后获取" },
+    { "type": "serverchan", "name": "微信Server酱",   "token": "sct.ftqq.com 的 SendKey" }
   ]
 }
