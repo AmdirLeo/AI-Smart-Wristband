@@ -13,14 +13,14 @@ int main() {
   assert(tap.update(false, false, 130) == SosAction::trigger);
   assert(tap.update(false, false, 200) == SosAction::none);
 
-  // Preserve the colleague's <1000 ms / >=1500 ms thresholds.
+  // No dead zone: any release that did not escalate to a cancel triggers,
+  // so 1.0-1.5 s presses (previously silently dropped) now send SOS too.
   for (uint32_t duration : {999u, 1000u, 1499u}) {
     SosControls boundary;
     boundary.update(true, false, 0);
     boundary.update(true, false, 30);
     boundary.update(false, false, duration);
-    assert(boundary.update(false, false, duration + 30) ==
-           (duration < 1000 ? SosAction::trigger : SosAction::none));
+    assert(boundary.update(false, false, duration + 30) == SosAction::trigger);
   }
   SosControls hold;
   hold.update(true, false, 0);

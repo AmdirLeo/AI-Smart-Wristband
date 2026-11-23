@@ -39,7 +39,7 @@
 #include "BandCommands.h"
 #include "LocalFeedback.h"
 
-#define FIRMWARE_VERSION "io-20261123-1"
+#define FIRMWARE_VERSION "io-20261123-2"
 
 #define DEVICE_NAME   "YianBand"   // 可改为 YianBand-01 等区分不同老人
 #define PIN_BTN_SOS   D6
@@ -165,10 +165,23 @@ void commandTask() {
 }
 
 void buttonTask(uint32_t now, bool connected) {
-  const SosAction action = buttons.update(digitalRead(PIN_BTN_SOS) == LOW,
-                                         digitalRead(PIN_BTN_CANCEL) == LOW, now);
-  if (action == SosAction::cancel) cancelAlert(true);
-  else if (action == SosAction::trigger && connected) {
+  static bool sosRaw = false;
+  const bool sosPressed = digitalRead(PIN_BTN_SOS) == LOW;
+  const bool cancelPressed = digitalRead(PIN_BTN_CANCEL) == LOW;
+  if (sosPressed != sosRaw) {   // 边沿日志：连极短的点按也能在串口看到
+    sosRaw = sosPressed;
+    if (Serial) { Serial.print("[btn] D6 "); Serial.println(sosPressed ? "down" : "up"); }
+  }
+  const SosAction action = buttons.update(sosPressed, cancelPressed, now);
+  if (action == SosAction::cancel) {
+    if (Serial) Serial.println("[btn] hold/cancel -> cancel");
+    cancelAlert(true);
+  } else if (action == SosAction::trigger) {
+    if (!connected) {           // 断连：不补发事件，手环也不本地告警
+      if (Serial) Serial.println("[btn] tap ignored (not connected)");
+      return;
+    }
+    if (Serial) Serial.println("[btn] tap -> sos sent");
     startSosAlert();
     sendEvent("sos", 0, 0, 1.0f);
     sosNoticeUntil = now + 3000;
