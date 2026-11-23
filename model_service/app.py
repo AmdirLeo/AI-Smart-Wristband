@@ -25,6 +25,11 @@ try:
 except ImportError:
     from pipeline import CSV_COLUMNS, DataQualityError, predict_streams
 
+try:
+    from . import wecom
+except ImportError:
+    import wecom
+
 ROOT = Path(__file__).resolve().parent
 MAX_BODY = 2 * 1024 * 1024
 MAX_SAMPLES = 4000
@@ -90,6 +95,12 @@ def create_app(model_path: Path | None = None, samples_path: Path | None = None,
         app.state.events = {}
         app.state.event_lock = threading.Lock()
         app.state.predict_lock = threading.Lock()
+        guardians = wecom.load_guardians()
+        if guardians.get("webhooks"):
+            print(f"[wecom] 企业微信告警已配置：{len(guardians['webhooks'])} 个群，"
+                  f"佩戴者={guardians.get('wearer_name') or '未命名'}")
+        else:
+            print("[wecom] 未配置企业微信告警（可选）：参考 guardians.example.json")
         yield
 
     app = FastAPI(title="颐安·云护演示", lifespan=lifespan, docs_url=None, redoc_url=None,
@@ -171,18 +182,24 @@ def create_app(model_path: Path | None = None, samples_path: Path | None = None,
     async def create_sos(request: Request):
         payload = validated_json(SosInput, await limited_body(request))
         with app.state.event_lock:
-            return deepcopy(create_event_locked("sos", str(payload.request_id)))
+            event = deepcopy(create_event_locked("sos", str(payload.request_id)))
+        asyncio.create_task(wecom.notify_event(event))   # 企业微信群告警（未配置则跳过）
+        return event
 
     @api.post("/events/{event_id}/cancel")
-    def cancel_sos(event_id: str):
+    async def cancel_sos(event_id: str):
         with app.state.event_lock:
             event = get_event_locked(event_id)
             if event["kind"] != "sos":
                 raise HTTPException(409, "此接口仅用于手表取消 SOS。")
-            if event["status"] != "cancelled":
+            newly_cancelled = event["status"] != "cancelled"
+            if newly_cancelled:
                 event.update(status="cancelled", reason="wearer_cancelled",
                              cancelled_at=time.time())
-            return deepcopy(event)
+            snapshot = deepcopy(event)
+        if newly_cancelled:
+            asyncio.create_task(wecom.notify_event(snapshot))  # 通知监护人群：已取消
+        return snapshot
 
     def classify(payload: SignalInput):
         values = np.asarray(payload.samples, dtype=float)
@@ -203,7 +220,10 @@ def create_app(model_path: Path | None = None, samples_path: Path | None = None,
     @api.post("/predict")
     async def predict(request: Request):
         payload = validated_json(SignalInput, await limited_body(request))
-        return await run_in_threadpool(classify, payload)
+        result = await run_in_threadpool(classify, payload)
+        if result.get("event"):
+            asyncio.create_task(wecom.notify_event(result["event"]))  # 疑似跌倒群告警
+        return result
 
     @api.post("/predict-csv")
     async def predict_csv(request: Request):

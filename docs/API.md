@@ -168,3 +168,20 @@ SOS 创建后为 pending，使用同一 20 秒 deadline：
 
 App、固件和服务端必须一起更新；旧服务端无此路由，将返回 404，App 会显示提交未确认。
 App 需在前台运行并连接手环和服务端。离线不会假装提交成功；恢复网络后再次长按会用同一请求标识重试。
+
+## 8. 企业微信告警（可选配置）
+
+SOS 创建、SOS 取消、疑似跌倒告警三类事件发生时，服务端会向配置的企业微信群
+推送一条 markdown 消息（群里拉入普通个人微信用户即可接收，无需安装企业微信）。
+
+配置 `model_service/guardians.json`（已加入 .gitignore，勿提交真实 key）：
+
+```json
+{
+  "wearer_name": "王奶奶",
+  "webhooks": [{ "name": "监护人微信群", "url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=你的key" }]
+}
+```
+
+获取 webhook：企业微信群 → 右键 → 添加群机器人 → 复制 Webhook 地址。
+未配置该文件时接口行为完全不变；发送失败只记日志，不影响事件流程。
