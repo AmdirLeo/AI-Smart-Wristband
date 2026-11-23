@@ -19,12 +19,15 @@
  *
  * 接线（原型洞洞板）：
  *   SOS 按键 -> D6（另一端 GND，INPUT_PULLUP）；取消按键 -> D7
- *   震动马达(DRV8837 一路) -> D1
+ *   HR8833：IA1->D1、IA2->D2；马达接 MA1/MA2；VCC、VM 接 3V3，GND 共地
+ *   MAX98357A：BCLK->D8、LRC->D9、DIN->D10、SD->D3；VIN->3V3，GND 共地
+ *   8Ω/1W 扬声器接功放 SPK+/SPK-；GAIN 悬空，未用的 HR8833 IB1/IB2 接 GND
  *   I2C 屏幕：GND->GND，3V3->3V3，SCL->D5，SDA->D4（硬件 I2C；Sense Plus 的板载 IMU
  *             使用独立的 Wire1 总线；支持热插拔，拔插屏幕不影响运行）
  *             st 帧的 "scr" 字段为屏幕诊断：0 未检测到 / 1 检测到未初始化 / 2 已就绪
  *             当前使用 D4/D5 硬件 I2C 和全帧缓冲刷新。
- *   MAX98357A 语音播报为后续迭代，本示例用震动+LED 代替本地提示
+ *   扬声器播放 I2S 提示音（非语音）；USB 115200 输入 a/v/t/x：声音/振动/两者/停止
+ *   测试各持续 2 秒，无需 BLE；SOS 提示 1.2 秒，跌倒提示 10 秒，取消立即停止
  */
 
 #include <bluefruit.h>
@@ -33,11 +36,13 @@
 #include <LSM6DS3.h>
 #include <math.h>
 #include "ButtonInput.h"
+#include "LocalFeedback.h"
+
+#define FIRMWARE_VERSION "io-20261116-2"
 
 #define DEVICE_NAME   "YianBand"   // 可改为 YianBand-01 等区分不同老人
 #define PIN_BTN_SOS   D6
 #define PIN_BTN_CANCEL D7
-#define PIN_VIB       D1
 #define PIN_LED_STAT  LED_RED      // 板载红灯（variant: LED_RED=11）
 
 BLEUart bleuart;                   // Nordic UART Service（NUS）
@@ -74,6 +79,7 @@ bool     countdownActive = false;
 uint32_t countdownEndMs = 0;
 ButtonInput sosButton, cancelButton;
 uint32_t sosNoticeUntil = 0;
+volatile bool muteRequested = false;
 
 // 分片发送：BLEUart 内部 FIFO 一次只接受约 MTU-3 字节（默认 MTU=23 时仅 20），
 // 超长帧的剩余部分会被直接丢弃 → 必须分片 + 背压重试。
@@ -100,6 +106,7 @@ void sendEvent(const char* kind, float impact, float stillSec, float conf) {
            "{\"t\":\"ev\",\"k\":\"%s\",\"i\":%.2f,\"w\":%.1f,\"c\":%.2f,\"q\":%u}\n",
            kind, impact, stillSec, conf, seq++);
   sendFrame(buf);
+  if (Serial) Serial.print(buf); // USB 可核对按键是否产生了事件
 }
 
 void sendState(float g, float pitch, float roll, bool still) {
@@ -129,18 +136,19 @@ void rxCallback(uint16_t conn_hdl) {
   }
   buf[n] = 0;
   if (n > 0 && strstr(buf, "\"mute\"") != nullptr) {
-    countdownActive = false;
-    inImpact = false;
-    analogWrite(PIN_VIB, 0);
-    digitalWrite(PIN_LED_STAT, LOW);
+    muteRequested = true; // BLE 回调只发请求，外设统一由 loop 控制。
   }
 }
 
 float readG(float ax, float ay, float az) { return sqrtf(ax*ax + ay*ay + az*az); }
 
-int readBattery() {  // XIAO A0 分压，按电池 3.55~4.2V 粗略映射
-  int raw = analogRead(A0);
-  float v = raw / 1023.0f * 3.3f * 2.0f;  // 板载 1/2 分压
+int readBattery() {  // XIAO Sense Plus 的 VBAT 分压（ADC_BAT），按电池 3.55~4.2V 映射
+  // VBAT_ENABLE 为低电平时接通板载电池分压器；读取后关闭以减少耗电。
+  digitalWrite(VBAT_ENABLE, LOW);
+  delay(2);
+  int raw = analogRead(ADC_BAT);
+  digitalWrite(VBAT_ENABLE, HIGH);
+  float v = raw / 4095.0f * 3.3f * 2.0f;  // 12 位 ADC，板载 1/2 分压
   int pct = (int)((v - 3.55f) / (4.2f - 3.55f) * 100);
   return constrain(pct, 0, 100);
 }
@@ -226,12 +234,53 @@ void screenTask() {
   drawScreen();
 }
 
+// 仅连接 USB 串口监视器时输出；不阻塞电池供电或 BLE 通信。
+void serialDiagnostics() {
+  static uint32_t last = 0;
+  if (!Serial || millis() - last < 1000) return;
+  last = millis();
+  Serial.print("fw=" FIRMWARE_VERSION " ble=");
+  Serial.print(Bluefruit.connected() ? 1 : 0);
+  Serial.print(" D6="); Serial.print(digitalRead(PIN_BTN_SOS));
+  Serial.print(" D7="); Serial.print(digitalRead(PIN_BTN_CANCEL));
+  Serial.print(" feedback="); Serial.print(LocalFeedback::active);
+  Serial.print(" motor="); Serial.print(LocalFeedback::useMotor && LocalFeedback::outputOn);
+  Serial.print(" amp="); Serial.print(digitalRead(LocalFeedback::ampEnable));
+  Serial.print(" dma="); Serial.println(LocalFeedback::dmaBlocks);
+}
+
+// 单字符 USB 模块测试，不制造 SOS 事件或改变云端记录。
+void feedbackTask() {
+  if (muteRequested) {
+    muteRequested = false;
+    countdownActive = false;
+    inImpact = false;
+    LocalFeedback::stop();
+    digitalWrite(PIN_LED_STAT, LOW);
+  }
+  if (Serial) {
+    while (Serial.available()) {
+      switch (Serial.read()) {
+        case 'a': LocalFeedback::start(true, false, 2000); break;
+        case 'v': LocalFeedback::start(false, true, 2000); break;
+        case 't': LocalFeedback::start(true, true, 2000); break;
+        case 'x': LocalFeedback::stop(); Serial.println("feedback stopped"); break;
+        default: break;
+      }
+    }
+  }
+  LocalFeedback::tick();
+}
+
 void setup() {
+  Serial.begin(115200);
   pinMode(PIN_BTN_SOS, INPUT_PULLUP);
   pinMode(PIN_BTN_CANCEL, INPUT_PULLUP);
-  pinMode(PIN_VIB, OUTPUT);
+  LocalFeedback::begin();
   pinMode(PIN_LED_STAT, OUTPUT);
-  analogReadResolution(10);
+  pinMode(VBAT_ENABLE, OUTPUT);
+  digitalWrite(VBAT_ENABLE, HIGH);
+  analogReadResolution(12);
 
   if (imu.begin() != 0) { /* IMU 初始化失败：LED 常亮提示 */ }
   Wire.begin();                             // 硬件 I2C（D4=SDA, D5=SCL）
@@ -254,8 +303,16 @@ void setup() {
 }
 
 void loop() {
+  feedbackTask();
+  serialDiagnostics();
   screenTask();                 // 屏幕 500ms 节流刷新（连接与否都刷）
-  if (!Bluefruit.connected()) { delay(20); return; }
+  if (!Bluefruit.connected()) {
+    if (cancelButton.update(digitalRead(PIN_BTN_CANCEL) == LOW, millis(), 0)) {
+      LocalFeedback::stop();
+    }
+    delay(5);
+    return;
+  }
 
   sosButton = ButtonInput{};
   cancelButton = ButtonInput{};
@@ -264,6 +321,8 @@ void loop() {
   lastStateMs = bootMs;
 
   while (Bluefruit.connected()) {
+    feedbackTask();
+    serialDiagnostics();
     uint32_t now = millis();
 
     screenTask();                 // 连接期间也持续刷新屏幕（内部 500ms 节流）
@@ -272,15 +331,16 @@ void loop() {
     bool sos = sosButton.update(digitalRead(PIN_BTN_SOS) == LOW, now, 1500);
     bool cancel = cancelButton.update(digitalRead(PIN_BTN_CANCEL) == LOW, now, 0);
     if (cancel) {
+      LocalFeedback::stop();
       sendEvent("cancel", 0, 0, 1.0f);
       countdownActive = false;
       inImpact = false;
       gPeak = 0;
       stillSinceMs = 0;
       sosNoticeUntil = 0;
-      analogWrite(PIN_VIB, 0);
       digitalWrite(PIN_LED_STAT, LOW);
     } else if (sos && !cancelButton.down) {
+      LocalFeedback::start(true, true, 1200);
       sendEvent("sos", 0, 0, 1.0f);
       sosNoticeUntil = now + 3000;
     }
@@ -309,7 +369,7 @@ void loop() {
           sendEvent("fall", gPeak, stillSec, 0.85f);   // 事件帧仍发，App 记录端侧初筛
           countdownActive = true;
           countdownEndMs = now + COUNTDOWN_S * 1000;
-          analogWrite(PIN_VIB, 200);
+          LocalFeedback::start(true, true, COUNTDOWN_S * 1000);
           digitalWrite(PIN_LED_STAT, HIGH);
         }
       } else {
@@ -319,7 +379,7 @@ void loop() {
 
       if (countdownActive && (int32_t)(now - countdownEndMs) >= 0) {
         countdownActive = false;
-        analogWrite(PIN_VIB, 0);
+        LocalFeedback::stop();
         digitalWrite(PIN_LED_STAT, LOW);
       }
     }
@@ -339,7 +399,7 @@ void loop() {
   }
   countdownActive = false;
   inImpact = false;
-  analogWrite(PIN_VIB, 0);
+  LocalFeedback::stop();
   digitalWrite(PIN_LED_STAT, LOW);
   // 断连后 Advertising.restartOnDisconnect(true) 自动恢复广播，App 负责重连
 }
