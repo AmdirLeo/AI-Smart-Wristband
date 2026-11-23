@@ -103,10 +103,32 @@ def _payload_for(entry: dict, title: str, content: str) -> dict:
     return {"msgtype": "markdown", "markdown": {"content": content}}  # wecom
 
 
-async def _post_one(name: str, url: str, payload: dict):
+def _check_response(kind: str, body):
+    """各渠道用 HTTP 200 + 返回体里的状态码表示失败（token 无效、额度用尽、未实名…）。
+
+    只看 HTTP 状态会把这类失败当成功，告警就静默丢了，所以这里显式判一次。
+    """
+    if not isinstance(body, dict):
+        return
+    if kind == "pushplus":
+        ok, code, msg = body.get("code") == 200, body.get("code"), body.get("msg")
+    elif kind == "serverchan":
+        ok, code, msg = body.get("code") == 0, body.get("code"), body.get("message")
+    else:  # wecom / dingtalk
+        ok, code, msg = body.get("errcode") == 0, body.get("errcode"), body.get("errmsg")
+    if not ok:
+        raise RuntimeError(f"渠道返回失败 code={code} msg={msg}")
+
+
+async def _post_one(name: str, kind: str, url: str, payload: dict):
     async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
         r = await client.post(url, json=payload)
         r.raise_for_status()
+        try:
+            body = r.json()
+        except ValueError:      # 非 JSON 响应（如纯文本 ok），按成功处理
+            return r.status_code
+        _check_response(kind, body)
         return r.status_code
 
 
@@ -120,7 +142,8 @@ async def notify_event(event: dict):
     content = _content_for(event, cfg)
     jobs = []
     for w in webhooks:
-        jobs.append(_post_one(w.get("name", _entry_type(w)), _url_for(w), _payload_for(w, title, content)))
+        jobs.append(_post_one(w.get("name", _entry_type(w)), _entry_type(w),
+                              _url_for(w), _payload_for(w, title, content)))
     results = await asyncio.gather(*jobs, return_exceptions=True)
     for w, r in zip(webhooks, results):
         if isinstance(r, BaseException):

@@ -113,7 +113,11 @@ def test_multi_channel_payload_shapes(tmp_path, monkeypatch):
             received.append((self.path, body))
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(b'{"code":0}')
+            # 各渠道成功返回体不同：pushplus 用 code=200，企微/钉钉用 errcode=0
+            if self.path == "/pushplus":
+                self.wfile.write(b'{"code":200,"msg":"ok"}')
+            else:
+                self.wfile.write(b'{"errcode":0,"errmsg":"ok"}')
 
         def log_message(self, *args):
             pass
@@ -152,3 +156,44 @@ def test_multi_channel_payload_shapes(tmp_path, monkeypatch):
     pp = next(b for p, b in received if p == "/pushplus")
     assert ding["msgtype"] == "markdown" and "SOS" in ding["markdown"]["text"]
     assert pp["token"] == "tok123" and "SOS" in pp["title"]
+
+
+def test_channel_error_code_is_reported(tmp_path, monkeypatch, caplog):
+    """HTTP 200 但返回体 code 非成功（token 无效/额度用尽）必须记日志，不能静默成功。"""
+
+    class H(BaseHTTPRequestHandler):
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length", 0))
+            self.rfile.read(n)
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write('{"code":408,"msg":"今日额度已用完"}'.encode("utf-8"))
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), H)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    cfg = tmp_path / "guardians.json"
+    cfg.write_text(json.dumps({
+        "wearer_name": "测试奶奶",
+        "webhooks": [{"type": "pushplus", "name": "微信", "token": "tok",
+                      "url": f"http://127.0.0.1:{server.server_port}/pushplus"}],
+    }, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setenv("WECOM_GUARDIANS_FILE", str(cfg))
+
+    from app import create_app
+    from fastapi.testclient import TestClient
+    with caplog.at_level("WARNING", logger="yian.notify"):
+        with TestClient(create_app(access_token="test-secret")) as client:
+            client.headers["Authorization"] = "Bearer test-secret"
+            uuid = "550e8400-e29b-41d4-a716-446655440000"
+            assert client.post("/api/events/sos", json={"request_id": uuid}).status_code == 200
+            deadline = time.time() + 3
+            while time.time() < deadline and "告警推送失败" not in caplog.text:
+                time.sleep(0.05)
+
+    server.shutdown()
+    server.server_close()
+    assert "告警推送失败" in caplog.text and "408" in caplog.text
