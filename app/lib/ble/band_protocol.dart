@@ -59,5 +59,7 @@ class BandProtocolParser {
 
   // —— 手机 → 手环 帧 ——
   static List<int> frameMute() => utf8.encode('{"t":"mute"}\n');
+  static List<int> frameSosOn() => utf8.encode('{"t":"sos-on"}\n');   // 手环开始震动+蜂鸣
+  static List<int> frameSosOff() => utf8.encode('{"t":"sos-off"}\n'); // 手环停止告警
   static List<int> frameAck(int seq) => utf8.encode('{"t":"ok","q":$seq}\n');
 }

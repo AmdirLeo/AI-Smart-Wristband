@@ -24,10 +24,14 @@
  *             使用独立的 Wire1 总线；支持热插拔，拔插屏幕不影响运行）
  *             st 帧的 "scr" 字段为屏幕诊断：0 未检测到 / 1 检测到未初始化 / 2 已就绪
  *             当前使用 D4/D5 硬件 I2C 和全帧缓冲刷新。
- *   MAX98357A 语音播报为后续迭代，本示例用震动+LED 代替本地提示
+ *   MAX98357A（SOS 蜂鸣）：BCLK->D2，LRC->D3，DIN->D10，SD->3V3 或悬空
+ *             —— SOS 告警期间输出约 2kHz 蜂鸣（nRF 硬件 I2S 方波）
+ *   按键交互：短按 SOS 按键触发求助；长按 SOS 按键（≥1.5s）或 D7 取消；
+ *             SOS 告警期间手环间歇震动 + 蜂鸣，直至取消（含手机 sos-off 指令）
  */
 
 #include <bluefruit.h>
+#include <nrf_i2s.h>
 #include <U8g2lib.h>
 #include <Wire.h>
 #include <LSM6DS3.h>
@@ -39,6 +43,9 @@
 #define PIN_BTN_CANCEL D7
 #define PIN_VIB       D1
 #define PIN_LED_STAT  LED_RED      // 板载红灯（variant: LED_RED=11）
+#define BEEP_SCK      28   // D2 —— I2S 蜂鸣位时钟（P0.28）
+#define BEEP_LRCK     29   // D3 —— I2S 字时钟（P0.29）
+#define BEEP_SDOUT    47   // D10 —— I2S 数据输出（P1.15）
 
 BLEUart bleuart;                   // Nordic UART Service（NUS）
 LSM6DS3 imu(I2C_MODE, 0x6A);       // 板载 LSM6DS3TR-C
@@ -74,6 +81,17 @@ bool     countdownActive = false;
 uint32_t countdownEndMs = 0;
 ButtonInput sosButton, cancelButton;
 uint32_t sosNoticeUntil = 0;
+
+// —— SOS 告警（间歇震动 + I2S 蜂鸣） ——
+bool sosAlerting = false;          // SOS 告警中（短按触发，取消/长按停止）
+uint32_t sosAlertStartMs = 0;
+#define BEEP_FRAMES 8064           // LRCK≈16.13kHz，0.5 秒纯蜂鸣缓冲（约 31.5KB）
+static int32_t i2sBuf[BEEP_FRAMES];
+bool i2sOn = false;
+uint32_t i2sToneStartMs = 0;       // 本次播放起始时间（0.5s 后软件停掉防溢出）
+bool sosBtnDownPrev = false;
+bool sosBtnLongFired = false;
+uint32_t sosBtnDownAt = 0;
 
 // 分片发送：BLEUart 内部 FIFO 一次只接受约 MTU-3 字节（默认 MTU=23 时仅 20），
 // 超长帧的剩余部分会被直接丢弃 → 必须分片 + 背压重试。
@@ -128,7 +146,11 @@ void rxCallback(uint16_t conn_hdl) {
     buf[n++] = (char)bleuart.read();
   }
   buf[n] = 0;
-  if (n > 0 && strstr(buf, "\"mute\"") != nullptr) {
+  if (n <= 0) return;
+  if (strstr(buf, "\"sos-off\"") != nullptr) {   // 手机端取消 → 手环停止告警
+    stopSosAlert();
+    sendEvent("cancel", 0, 0, 1.0f);
+  } else if (strstr(buf, "\"mute\"") != nullptr) {
     countdownActive = false;
     inImpact = false;
     analogWrite(PIN_VIB, 0);
@@ -143,6 +165,44 @@ int readBattery() {  // XIAO A0 分压，按电池 3.55~4.2V 粗略映射
   float v = raw / 1023.0f * 3.3f * 2.0f;  // 板载 1/2 分压
   int pct = (int)((v - 3.55f) / (4.2f - 3.55f) * 100);
   return constrain(pct, 0, 100);
+}
+
+// —— I2S 蜂鸣（MAX98357A）：nRF52840 无硬件循环缓冲，用 1 秒长缓冲（蜂鸣+静音），
+//    ENDED 后在 loop 里重新 TASKS_START，节奏即「响 0.4s → 停 0.6s」循环 ——
+void i2sBeepInit() {
+  for (uint32_t i = 0; i < BEEP_FRAMES; i++) {
+    int16_t v = ((i / 8) % 2 == 0) ? 6000 : -6000;   // 约 2kHz 方波
+    i2sBuf[i] = (int32_t)((uint32_t)(int16_t)v << 16 | (uint16_t)(int16_t)v);
+  }
+  nrf_i2s_pins_set(NRF_I2S, BEEP_SCK, BEEP_LRCK, 0xFFFFFFFFUL, BEEP_SDOUT, 0xFFFFFFFFUL);
+  nrf_i2s_configure(NRF_I2S, NRF_I2S_MODE_MASTER, NRF_I2S_FORMAT_I2S, NRF_I2S_ALIGN_LEFT,
+                    NRF_I2S_SWIDTH_16BIT, NRF_I2S_CHANNELS_STEREO,
+                    NRF_I2S_MCK_32MDIV31, NRF_I2S_RATIO_64X);
+  NRF_I2S->CONFIG.TXEN = 1;                  // 只开发送（SDIN 未接，接收无意义）
+  NRF_I2S->CONFIG.RXEN = 0;
+  NRF_I2S->TXD.PTR = (uint32_t)i2sBuf;
+  NRF_I2S->RXTXD.MAXCNT = BEEP_FRAMES;       // 单位：32-bit 帧
+  nrf_i2s_enable(NRF_I2S);
+}
+void i2sTone(bool on) {
+  if (on == i2sOn) return;
+  i2sOn = on;
+  if (on) {
+    i2sToneStartMs = millis();
+    NRF_I2S->TASKS_START = 1;                // 播放 0.5s 缓冲后自动停止
+  } else {
+    NRF_I2S->TASKS_STOP = 1;
+  }
+}
+void startSosAlert() {
+  sosAlerting = true;
+  sosAlertStartMs = millis();
+  i2sTone(true);                // 蜂鸣开（间歇节奏由 loop 门控）
+}
+void stopSosAlert() {
+  sosAlerting = false;
+  i2sTone(false);
+  analogWrite(PIN_VIB, 0);
 }
 
 // 屏幕在位探测：硬件 I2C 上对地址发一次传输，NACK/错误 = 不在位
@@ -179,8 +239,10 @@ void drawScreen() {
     u8g2->drawUTF8(0, 29, "蓝牙:未连接");
     u8g2->drawUTF8(0, 43, "等待手机连接...");
   }
-  if ((int32_t)(sosNoticeUntil - millis()) > 0) {
-    u8g2->drawUTF8(0, 60, "SOS已触发");
+  if (sosAlerting) {
+    u8g2->drawUTF8(0, 60, "SOS 告警中! 长按取消");
+  } else if ((int32_t)(sosNoticeUntil - millis()) > 0) {
+    u8g2->drawUTF8(0, 60, "SOS请在手机确认");
   } else if (countdownActive) {
     int left = (int32_t)(countdownEndMs - millis()) / 1000 + 1;
     if (left < 0) left = 0;
@@ -232,6 +294,7 @@ void setup() {
   pinMode(PIN_VIB, OUTPUT);
   pinMode(PIN_LED_STAT, OUTPUT);
   analogReadResolution(10);
+  i2sBeepInit();
 
   if (imu.begin() != 0) { /* IMU 初始化失败：LED 常亮提示 */ }
   Wire.begin();                             // 硬件 I2C（D4=SDA, D5=SCL）
@@ -255,6 +318,18 @@ void setup() {
 
 void loop() {
   screenTask();                 // 屏幕 500ms 节流刷新（连接与否都刷）
+  if (sosAlerting) {            // SOS 告警：蜂鸣 0.4s/停 0.6s，震动 0.2s/停 0.8s
+    uint32_t t = (millis() - sosAlertStartMs) % 1000;
+    i2sTone(t < 400);
+    analogWrite(PIN_VIB, t < 200 ? 200 : 0);
+  } else if (i2sOn) {
+    i2sTone(false);
+    analogWrite(PIN_VIB, 0);
+  }
+  if (i2sOn && millis() - i2sToneStartMs >= 400) {   // 0.5s 缓冲播完即停，防溢出
+    NRF_I2S->TASKS_STOP = 1;
+    i2sOn = false;
+  }
   if (!Bluefruit.connected()) { delay(20); return; }
 
   sosButton = ButtonInput{};
@@ -268,10 +343,25 @@ void loop() {
 
     screenTask();                 // 连接期间也持续刷新屏幕（内部 500ms 节流）
 
-    // 取消优先；连接期间轮询，事件不依赖本地倒计时。
-    bool sos = sosButton.update(digitalRead(PIN_BTN_SOS) == LOW, now, 1500);
+    // 按键交互：短按 D6 触发 SOS；长按 D6（≥1.5s）取消告警；D7 取消键保留。
+    bool sosLong = sosButton.update(digitalRead(PIN_BTN_SOS) == LOW, now, 1500);
     bool cancel = cancelButton.update(digitalRead(PIN_BTN_CANCEL) == LOW, now, 0);
-    if (cancel) {
+    bool downNow = sosButton.down;
+    if (downNow && !sosBtnDownPrev) {          // 按下沿
+      sosBtnDownAt = now;
+      sosBtnLongFired = false;
+    }
+    if (!downNow && sosBtnDownPrev) {          // 释放沿：短按（<1s）→ 触发 SOS
+      if (!sosBtnLongFired && now - sosBtnDownAt < 1000) {
+        sendEvent("sos", 0, 0, 1.0f);
+        sosNoticeUntil = now + 3000;
+        startSosAlert();                       // 手环震动 + 蜂鸣
+      }
+    }
+    sosBtnDownPrev = downNow;
+    if (sosLong) {                             // 长按 ≥1.5s → 取消告警
+      sosBtnLongFired = true;
+      stopSosAlert();
       sendEvent("cancel", 0, 0, 1.0f);
       countdownActive = false;
       inImpact = false;
@@ -280,9 +370,16 @@ void loop() {
       sosNoticeUntil = 0;
       analogWrite(PIN_VIB, 0);
       digitalWrite(PIN_LED_STAT, LOW);
-    } else if (sos && !cancelButton.down) {
-      sendEvent("sos", 0, 0, 1.0f);
-      sosNoticeUntil = now + 3000;
+    } else if (cancel) {                       // D7 取消键同样取消
+      stopSosAlert();
+      sendEvent("cancel", 0, 0, 1.0f);
+      countdownActive = false;
+      inImpact = false;
+      gPeak = 0;
+      stillSinceMs = 0;
+      sosNoticeUntil = 0;
+      analogWrite(PIN_VIB, 0);
+      digitalWrite(PIN_LED_STAT, LOW);
     }
 
     // —— 20Hz 六轴采集 + raw 帧（模型识别输入） ——
@@ -339,7 +436,9 @@ void loop() {
   }
   countdownActive = false;
   inImpact = false;
-  analogWrite(PIN_VIB, 0);
+  if (!sosAlerting) {          // SOS 告警在断连后持续（离线保护），震动节奏由 loop 维持
+    analogWrite(PIN_VIB, 0);
+  }
   digitalWrite(PIN_LED_STAT, LOW);
   // 断连后 Advertising.restartOnDisconnect(true) 自动恢复广播，App 负责重连
 }
