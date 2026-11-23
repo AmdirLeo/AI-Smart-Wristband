@@ -1,17 +1,19 @@
-"""企业微信群机器人告警（可选）。
+"""监护人告警分发（可选）：支持企业微信 / 钉钉 / PushPlus / Server酱。
 
 配置 model_service/guardians.json（可被环境变量 WECOM_GUARDIANS_FILE 覆盖）：
 {
   "wearer_name": "王奶奶",
   "webhooks": [
-    {"name": "监护人微信群", "url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx"}
+    { "type": "wecom",      "name": "企业微信内部群", "url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx" },
+    { "type": "dingtalk",   "name": "钉钉群",         "url": "https://oapi.dingtalk.com/robot/send?access_token=xxx" },
+    { "type": "pushplus",   "name": "微信PushPlus",   "token": "pushplus官网微信扫码登录后获取" },
+    { "type": "serverchan", "name": "微信Server酱",   "token": "sct.ftqq.com的SendKey" }
   ]
 }
 
-- webhooks 为空或文件不存在时静默跳过，不影响任何接口。
-- 每次 SOS 创建 / SOS 取消 / 疑似跌倒告警时，向所有群推送一条 markdown 消息。
-  群里拉入普通个人微信用户即可接收（无需人人安装企业微信）。
-- 单个群发送失败只记日志，不影响其他群与接口本身。
+- type 缺省按 "wecom" 处理；每条 SOS/取消/疑似跌倒事件向全部渠道各推一条。
+- pushplus / serverchan 的消息直接出现在绑定者的微信里（服务号推送）。
+- webhooks 为空或文件不存在时静默跳过；单个渠道失败只记日志。
 """
 import asyncio
 import json
@@ -24,9 +26,11 @@ import httpx
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = ROOT / "guardians.json"
-log = logging.getLogger("yian.wecom")
+log = logging.getLogger("yian.notify")
 
 _KIND_TEXT = {"sos": "SOS 求助", "fall": "疑似跌倒"}
+PUSHPLUS_URL = "http://www.pushplus.plus/send"
+SERVERCHAN_URL = "https://sctapi.ftqq.com/{token}.send"
 
 
 def config_path() -> Path:
@@ -41,7 +45,7 @@ def load_guardians() -> dict:
         return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        webhooks = [w for w in data.get("webhooks", []) if w.get("url")]
+        webhooks = [w for w in data.get("webhooks", []) if _url_for(w)]
         return {"wearer_name": data.get("wearer_name", ""), "webhooks": webhooks}
     except (json.JSONDecodeError, OSError):
         log.warning("guardians 配置读取失败：%s", path)
@@ -52,7 +56,21 @@ def configured() -> bool:
     return bool(load_guardians().get("webhooks"))
 
 
-def _build_message(event: dict, cfg: dict) -> str:
+def _entry_type(entry: dict) -> str:
+    return (entry.get("type") or "wecom").lower()
+
+
+def _url_for(entry: dict) -> str:
+    t = _entry_type(entry)
+    if t == "pushplus":
+        return entry.get("url") or PUSHPLUS_URL
+    if t == "serverchan":
+        token = entry.get("token", "")
+        return entry.get("url") or SERVERCHAN_URL.format(token=token)
+    return entry.get("url", "")
+
+
+def _content_for(event: dict, cfg: dict) -> str:
     kind = event.get("kind", "fall")
     title = f"【颐安云护】{_KIND_TEXT.get(kind, kind)}告警"
     when = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -73,6 +91,18 @@ def _build_message(event: dict, cfg: dict) -> str:
     ])
 
 
+def _payload_for(entry: dict, title: str, content: str) -> dict:
+    t = _entry_type(entry)
+    if t == "dingtalk":
+        return {"msgtype": "markdown", "markdown": {"title": title[:20], "text": content}}
+    if t == "pushplus":
+        return {"token": entry.get("token", ""), "title": title,
+                "content": content, "template": "markdown"}
+    if t == "serverchan":
+        return {"title": title, "desp": content}
+    return {"msgtype": "markdown", "markdown": {"content": content}}  # wecom
+
+
 async def _post_one(name: str, url: str, payload: dict):
     async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
         r = await client.post(url, json=payload)
@@ -81,16 +111,17 @@ async def _post_one(name: str, url: str, payload: dict):
 
 
 async def notify_event(event: dict):
-    """向所有配置的企业微信群推送事件告警。所有异常都在本函数内吞掉。"""
+    """向所有配置的渠道推送事件告警。所有异常都在本函数内吞掉。"""
     cfg = load_guardians()
     webhooks = cfg.get("webhooks", [])
     if not webhooks:
         return
-    payload = {"msgtype": "markdown", "markdown": {"content": _build_message(event, cfg)}}
-    results = await asyncio.gather(
-        *(_post_one(w["name"], w["url"], payload) for w in webhooks),
-        return_exceptions=True,
-    )
+    title = f"【颐安云护】{_KIND_TEXT.get(event.get('kind', 'fall'), '事件')}告警"
+    content = _content_for(event, cfg)
+    jobs = []
+    for w in webhooks:
+        jobs.append(_post_one(w.get("name", _entry_type(w)), _url_for(w), _payload_for(w, title, content)))
+    results = await asyncio.gather(*jobs, return_exceptions=True)
     for w, r in zip(webhooks, results):
         if isinstance(r, BaseException):
-            log.warning("微信告警推送失败[%s]：%r", w.get("name", "?"), r)
+            log.warning("告警推送失败[%s]：%r", w.get("name", "?"), r)
